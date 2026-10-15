@@ -44,7 +44,7 @@ object Anchoring {
 
     private fun say(msg: String) { _messages.trySend(msg) }
 
-    /** Public memo content. Contains no GPS position – the location stays in the private record file. */
+    /** Public memo content: key figures, GPS position (5 decimals ≈ 1 m) and the hash of the full record. */
     fun memoJson(r: MeasurementRecord, sha256: String): String = buildJsonObject {
         put("sha256", sha256)
         put("id", r.id)
@@ -55,6 +55,11 @@ object Anchoring {
         put("footprint_m2", r.footprintM2)
         put("max_height_m", r.maxHeightM)
         put("method", r.method)
+        r.location?.let { g ->
+            put("lat", g.lat)
+            put("lon", g.lon)
+            g.accuracyM?.let { put("gps_acc_m", it) }
+        }
     }.toString()
 
     // ------------------------------------------------------------------ start

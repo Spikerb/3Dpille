@@ -41,7 +41,15 @@ data class Project(
 }
 
 @Serializable
-data class GeoPoint(val lat: Double, val lon: Double, val accuracyM: Double? = null)
+data class GeoPoint(
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Double? = null,
+    /** number of GPS fixes averaged (null = single fix) */
+    val samples: Int? = null,
+    /** "gps-average" when the position was surveyed with the averaging dialog */
+    val source: String? = null,
+)
 
 @Serializable
 data class HeightmapRef(val cols: Int, val rows: Int, val cellSizeM: Double, val file: String, val sha256: String)

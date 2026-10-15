@@ -191,6 +191,10 @@ fun ProjectScreen(
 @Composable
 private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecord) {
     var preview by remember(m.id) { mutableStateOf<ImageBitmap?>(null) }
+    var showGps by remember { mutableStateOf(false) }
+    var confirmGps by remember { mutableStateOf(false) }
+    val anchored = p.anchor != null && p.anchorMatches && p.anchor.status != ChainAnchor.REJECTED &&
+        p.anchor.status != ChainAnchor.EXPIRED && p.anchor.status != ChainAnchor.FAILED
     LaunchedEffect(m.id) {
         preview = withContext(Dispatchers.IO) {
             val f = File(MeasurementSaver.measurementDir(store, p.id), MeasurementSaver.PREVIEW_FILE)
@@ -213,7 +217,26 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
                 m.inputs.forEach { (k, v) -> Stat(inputLabel(k), "${fmt(v, 2)} m") }
             }
             Stat("Metoda", m.method)
-            m.location?.let { Stat("Poloha", "%.5f, %.5f".format(it.lat, it.lon)) }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("GPS poloha", style = MaterialTheme.typography.labelLarge)
+            val g = m.location
+            if (g == null) {
+                Text("Poloha zatím není zaměřená.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text(String.format(java.util.Locale.US, "%.5f, %.5f", g.lat, g.lon), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                val acc = g.accuracyM
+                Text(
+                    (if (acc != null) "přesnost ±%.1f m".format(acc) else "přesnost neznámá") +
+                        if (g.source == "gps-average") " · průměr z ${g.samples ?: 0} měření" else " · jednorázové měření",
+                    color = if (acc != null && acc <= 1.0) MaterialTheme.colorScheme.tertiary
+                    else if (acc != null && acc <= 3.0) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedButton(onClick = { if (anchored) confirmGps = true else showGps = true }) {
+                Text(if (g == null) "Zaměřit GPS polohu" else "Zaměřit polohu přesněji")
+            }
             m.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             preview?.let {
                 Text("Výšková mapa (pohled shora)", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 8.dp))
@@ -221,6 +244,22 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
             }
             Text("SHA-256: ${p.recordSha256}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
         }
+    }
+
+    if (showGps) {
+        GpsFixDialog(
+            onResult = { geo -> showGps = false; MeasurementSaver.updateLocation(store, p.id, geo) },
+            onDismiss = { showGps = false },
+        )
+    }
+    if (confirmGps) {
+        AlertDialog(
+            onDismissRequest = { confirmGps = false },
+            title = { Text("Měření už je v blockchainu") },
+            text = { Text("Nová poloha změní záznam, takže ho bude potřeba zapsat do blockchainu znovu. Původní zápis v ledgeru zůstane, ale nebude odpovídat novému záznamu. Pokračovat?") },
+            confirmButton = { TextButton(onClick = { confirmGps = false; showGps = true }) { Text("Pokračovat") } },
+            dismissButton = { TextButton(onClick = { confirmGps = false }) { Text("Zrušit") } },
+        )
     }
 }
 
@@ -252,9 +291,16 @@ private fun ChainCard(p: Project, settings: Settings, onSettings: () -> Unit) {
                     if (stale) Text("Zápis patří k předchozímu měření. Nové měření zatím zapsané není.", color = MaterialTheme.colorScheme.error)
                     Text(
                         "Zapíše do ${netName(settings.network)} objem, čas a otisk (SHA-256) celého záznamu. " +
-                            "Transakci potvrdíte v aplikaci Xaman; poplatek je zlomek haléře. GPS poloha se nezapisuje.",
+                            "Zapíše se i GPS poloha (na ~1 m). Transakci potvrdíte v aplikaci Xaman; poplatek je zlomek haléře.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    val loc = p.measurement?.location
+                    if (loc == null || (loc.accuracyM ?: 99.0) > 1.0) {
+                        Text(
+                            "Tip: před zápisem zaměřte GPS polohu (tlačítko výše), aby byla v blockchainu co nejpřesnější.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     if (settings.xamanApiKey.isBlank()) {
                         Text("Nejdřív zadejte Xaman API klíč.", color = MaterialTheme.colorScheme.error)
                         OutlinedButton(onClick = onSettings) { Text("Otevřít nastavení") }
@@ -425,6 +471,10 @@ private fun shareMeasurement(context: android.content.Context, store: ProjectSto
         m.tonnes?.let { appendLine("Hmotnost: ≈ ${fmt(it, 1)} t (${m.densityTM3} t/m³)") }
         appendLine("Půdorys ${fmt(m.footprintM2, 0)} m², max. výška ${fmt(m.maxHeightM, 2)} m")
         appendLine("Změřeno: ${formatInstant(m.measuredAt)}")
+        m.location?.let { g ->
+            appendLine(String.format(java.util.Locale.US, "GPS: %.5f, %.5f", g.lat, g.lon) + (g.accuracyM?.let { " (±%.1f m)".format(it) } ?: ""))
+            appendLine(String.format(java.util.Locale.US, "Mapa: https://maps.google.com/?q=%.5f,%.5f", g.lat, g.lon))
+        }
         appendLine("SHA-256 záznamu: ${p.recordSha256}")
         val a = p.anchor
         if (a != null && a.status == ChainAnchor.VALIDATED && a.txid != null && p.anchorMatches) {

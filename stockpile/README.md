@@ -114,11 +114,16 @@ typu `stockpile-volume/1` ve formátu JSON:
 
 ```json
 {"sha256":"…","id":"…","name":"Štěrk 16/32","measured_at":"2026-10-15T08:00:00Z",
- "volume_m3":523.132,"tonnes":837.01,"footprint_m2":301.7,"max_height_m":4.32,"method":"arcore-raw-depth"}
+ "volume_m3":523.132,"tonnes":837.01,"footprint_m2":301.7,"max_height_m":4.32,"method":"arcore-raw-depth",
+ "lat":49.19500,"lon":16.66390,"gps_acc_m":1.4}
 ```
 
-**GPS poloha se do blockchainu nezapisuje.** Je jen v soukromém souboru `record.json`, který je
-zajištěný hashem. Uvědomte si, že **název hromady je veřejný**.
+**GPS poloha se zapisuje** na 5 desetinných míst (≈ 1 m) i s odhadem přesnosti. Pro co nejpřesnější
+polohu použijte v detailu měření **Zaměřit GPS polohu**: stůjte u hromady, aplikace až 90 s
+sbírá a průměruje GPS a ukáže poctivý odhad přesnosti (zeleně při ±1 m). Telefonní GPS dává
+běžně ±2–5 m; spolehlivě 1 m a lépe zajistí externí GNSS/RTK přijímač připojený přes Bluetooth
+a nastavený v Androidu jako poskytovatel polohy (aplikace ho pak využije automaticky).
+Uvědomte si, že **název hromady i poloha jsou veřejné**.
 
 ### Ověření kýmkoli
 

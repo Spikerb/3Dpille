@@ -57,7 +57,7 @@ object MeasurementSaver {
             method = method,
             device = "${Build.MANUFACTURER} ${Build.MODEL}",
             app = "StockpileVolume ${BuildConfig.VERSION_NAME}",
-            location = location?.let { GeoPoint(r6(it.latitude), r6(it.longitude), r1(it.accuracy.toDouble())) },
+            location = location?.let { GeoPoint(GeoAverage.round5(it.latitude), GeoAverage.round5(it.longitude), r1(it.accuracy.toDouble())) },
             volumeM3 = r3(outcome.volumeM3),
             fillM3 = r3(outcome.fillM3),
             cutM3 = r3(outcome.cutM3),
@@ -81,6 +81,20 @@ object MeasurementSaver {
         val hash = Hex.sha256(bytes)
         store.update(projectId) { it.copy(measurement = record, recordSha256 = hash, anchor = null) }
         return record
+    }
+
+    /**
+     * Replaces the GPS position in the record (e.g. after averaging) and re-hashes it.
+     * Any previous blockchain anchor no longer matches, so it is cleared.
+     */
+    fun updateLocation(store: ProjectStore, projectId: String, geo: GeoPoint): MeasurementRecord? {
+        val current = store.get(projectId)?.measurement ?: return null
+        val updated = current.copy(location = geo)
+        val bytes = recordJson.encodeToString(updated).toByteArray(Charsets.UTF_8)
+        File(measurementDir(store, projectId), RECORD_FILE).writeBytes(bytes)
+        val hash = Hex.sha256(bytes)
+        store.update(projectId) { it.copy(measurement = updated, recordSha256 = hash, anchor = null) }
+        return updated
     }
 
     fun measurementDir(store: ProjectStore, projectId: String) = File(store.dir(projectId), "measurement")
@@ -123,5 +137,4 @@ object MeasurementSaver {
     private fun r1(v: Double) = Math.round(v * 10.0) / 10.0
     private fun r2(v: Double) = Math.round(v * 100.0) / 100.0
     private fun r3(v: Double) = Math.round(v * 1000.0) / 1000.0
-    private fun r6(v: Double) = Math.round(v * 1_000_000.0) / 1_000_000.0
 }
