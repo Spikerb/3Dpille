@@ -20,6 +20,7 @@ import com.stockpile.volume.ar.ArScanScreen
 import com.stockpile.volume.capture.CaptureScreen
 import com.stockpile.volume.chain.Anchoring
 import com.stockpile.volume.ui.AppTheme
+import com.stockpile.volume.ui.ManualMeasureScreen
 import com.stockpile.volume.ui.ProjectScreen
 import com.stockpile.volume.ui.ProjectsScreen
 import com.stockpile.volume.ui.SettingsScreen
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                             projectId = id,
                             onBack = { nav.popBackStack() },
                             onScan = { nav.navigate("scan/$id") },
+                            onManual = { nav.navigate("manual/$id") },
                             onCapture = { nav.navigate("capture/$id") },
                             onSettings = { nav.navigate("settings") },
                         )
@@ -72,6 +74,13 @@ class MainActivity : ComponentActivity() {
                         ArScanScreen(
                             projectId = it.arguments?.getString("id").orEmpty(),
                             onFinished = { nav.popBackStack() },
+                            onCancel = { nav.popBackStack() },
+                        )
+                    }
+                    composable("manual/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) {
+                        ManualMeasureScreen(
+                            projectId = it.arguments?.getString("id").orEmpty(),
+                            onDone = { nav.popBackStack() },
                             onCancel = { nav.popBackStack() },
                         )
                     }

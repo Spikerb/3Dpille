@@ -37,6 +37,7 @@ object MeasurementSaver {
         method: String,
         voxels: Int,
         location: Location?,
+        inputs: Map<String, Double>? = null,
     ): MeasurementRecord {
         val project = store.get(projectId) ?: error("Projekt neexistuje")
         val dir = File(store.dir(projectId), "measurement").apply { deleteRecursively(); mkdirs() }
@@ -73,6 +74,7 @@ object MeasurementSaver {
             voxels = voxels,
             heightmap = HeightmapRef(g.cols, g.rows, r3(g.cellSize.toDouble()), HEIGHTMAP_FILE, Hex.sha256(gridFile.readBytes())),
             warnings = outcome.warnings,
+            inputs = inputs,
         )
         val bytes = recordJson.encodeToString(record).toByteArray(Charsets.UTF_8)
         File(dir, RECORD_FILE).writeBytes(bytes)

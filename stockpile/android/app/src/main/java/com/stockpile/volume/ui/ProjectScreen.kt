@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.work.WorkInfo
+import com.google.ar.core.ArCoreApk
 import androidx.work.WorkManager
 import com.stockpile.volume.chain.Anchoring
 import com.stockpile.volume.chain.Xrpl
@@ -77,6 +78,7 @@ fun ProjectScreen(
     projectId: String,
     onBack: () -> Unit,
     onScan: () -> Unit,
+    onManual: () -> Unit,
     onCapture: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -86,6 +88,13 @@ fun ProjectScreen(
     val projects by store.projects.collectAsState()
     val p = projects.firstOrNull { it.id == projectId }
     var confirmDelete by remember { mutableStateOf(false) }
+    // null = unknown yet, false = this phone can't run ARCore (offer manual measurement instead)
+    val arSupported = remember {
+        runCatching {
+            val a = ArCoreApk.getInstance().checkAvailability(context)
+            if (a == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) false else if (a.isSupported) true else null
+        }.getOrNull()
+    }
 
     if (p == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -119,12 +128,27 @@ fun ProjectScreen(
                             "Telefon hromadu naskenuje ve 3D během obcházení a objem spočítá sám – bez internetu. " +
                                 "Hodí se pro hromady zhruba do 15 m průměru.",
                         )
-                        Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Spustit 3D sken") }
+                        if (arSupported != false) {
+                            Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Spustit 3D sken") }
+                            OutlinedButton(onClick = onManual, modifier = Modifier.fillMaxWidth()) { Text("Ruční měření (bez AR)") }
+                        } else {
+                            Text(
+                                "Tento telefon nepodporuje ARCore, 3D sken tu nepůjde. Použijte ruční měření: " +
+                                    "zvolíte tvar hromady a zadáte rozměry, výšku pomůže změřit sklonoměr.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(onClick = onManual, modifier = Modifier.fillMaxWidth()) { Text("Ruční měření") }
+                        }
                     }
                 }
             } else {
                 MeasurementCard(store, p, m)
-                OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Změřit znovu") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (arSupported != false) {
+                        OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Znovu skenem") }
+                    }
+                    OutlinedButton(onClick = onManual, modifier = Modifier.weight(1f)) { Text("Znovu ručně") }
+                }
                 ChainCard(p, settings, onSettings)
             }
 
@@ -182,8 +206,12 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
             Stat("Změřeno", formatInstant(m.measuredAt))
             Stat("Půdorys", "${fmt(m.footprintM2, 0)} m²")
             Stat("Max. výška", "${fmt(m.maxHeightM, 2)} m")
-            Stat("Naskenováno plochy", "${fmt(m.coveragePct, 0)} %")
-            Stat("Sklon / rovinnost terénu", "${fmt(m.baseSlopePct, 1)} % / ±${fmt(m.baseRmseM * 100, 0)} cm")
+            if (m.inputs == null) {
+                Stat("Naskenováno plochy", "${fmt(m.coveragePct, 0)} %")
+                Stat("Sklon / rovinnost terénu", "${fmt(m.baseSlopePct, 1)} % / ±${fmt(m.baseRmseM * 100, 0)} cm")
+            } else {
+                m.inputs.forEach { (k, v) -> Stat(inputLabel(k), "${fmt(v, 2)} m") }
+            }
             Stat("Metoda", m.method)
             m.location?.let { Stat("Poloha", "%.5f, %.5f".format(it.lat, it.lon)) }
             m.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -291,6 +319,17 @@ private fun ChainCard(p: Project, settings: Settings, onSettings: () -> Unit) {
             }
         }
     }
+}
+
+private fun inputLabel(k: String) = when (k) {
+    "height_m" -> "Výška (zadáno)"
+    "perimeter_m" -> "Obvod paty"
+    "diameter_m" -> "Průměr paty"
+    "length_m" -> "Délka paty"
+    "width_m" -> "Šířka paty"
+    "top_length_m" -> "Délka horní plochy"
+    "top_width_m" -> "Šířka horní plochy"
+    else -> k
 }
 
 private fun netName(n: String) = if (n == Xrpl.TESTNET) "XRPL Testnet" else "XRPL Mainnet"

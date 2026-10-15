@@ -77,6 +77,8 @@ data class MeasurementRecord(
     val voxels: Int,
     val heightmap: HeightmapRef,
     val warnings: List<String> = emptyList(),
+    /** Manual measurement only: the dimensions the user entered (metres). */
+    val inputs: Map<String, Double>? = null,
 )
 
 /** Where the record hash was anchored on the XRP Ledger. */
