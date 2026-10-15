@@ -75,12 +75,39 @@ object MeasurementSaver {
             heightmap = HeightmapRef(g.cols, g.rows, r3(g.cellSize.toDouble()), HEIGHTMAP_FILE, Hex.sha256(gridFile.readBytes())),
             warnings = outcome.warnings,
             inputs = inputs,
-        )
+        ).let { applyWater(it, project.waterCoef) }
         val bytes = recordJson.encodeToString(record).toByteArray(Charsets.UTF_8)
         File(dir, RECORD_FILE).writeBytes(bytes)
         val hash = Hex.sha256(bytes)
         store.update(projectId) { it.copy(measurement = record, recordSha256 = hash, anchor = null) }
         return record
+    }
+
+    /** Fills the water fields from the coefficient (or clears them when it is null). */
+    fun applyWater(r: MeasurementRecord, k: Double?): MeasurementRecord {
+        if (k == null) return r.copy(waterCoef = null, waterM3 = null, dryVolumeM3 = null, dryTonnes = null)
+        val water = r3(r.volumeM3 * k)
+        return r.copy(
+            waterCoef = Math.round(k * 1000.0) / 1000.0,
+            waterM3 = water,
+            dryVolumeM3 = r3(r.volumeM3 - water),
+            dryTonnes = r.tonnes?.let { r2(maxOf(0.0, it - water)) },
+        )
+    }
+
+    /** Changes the water coefficient of a saved measurement and re-hashes it (clears the anchor). */
+    fun updateWater(store: ProjectStore, projectId: String, k: Double?): MeasurementRecord? {
+        val current = store.get(projectId)?.measurement ?: return null
+        store.update(projectId) { it.copy(waterCoef = k) }
+        return rewrite(store, projectId, applyWater(current, k))
+    }
+
+    private fun rewrite(store: ProjectStore, projectId: String, updated: MeasurementRecord): MeasurementRecord {
+        val bytes = recordJson.encodeToString(updated).toByteArray(Charsets.UTF_8)
+        File(measurementDir(store, projectId), RECORD_FILE).writeBytes(bytes)
+        val hash = Hex.sha256(bytes)
+        store.update(projectId) { it.copy(measurement = updated, recordSha256 = hash, anchor = null) }
+        return updated
     }
 
     /**

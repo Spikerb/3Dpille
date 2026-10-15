@@ -52,6 +52,10 @@ object Anchoring {
         put("measured_at", r.measuredAt)
         put("volume_m3", r.volumeM3)
         r.tonnes?.let { put("tonnes", it) }
+        r.waterCoef?.let { put("water_coef", it) }
+        r.waterM3?.let { put("water_m3", it) }
+        r.dryVolumeM3?.let { put("dry_m3", it) }
+        r.dryTonnes?.let { put("dry_t", it) }
         put("footprint_m2", r.footprintM2)
         put("max_height_m", r.maxHeightM)
         put("method", r.method)

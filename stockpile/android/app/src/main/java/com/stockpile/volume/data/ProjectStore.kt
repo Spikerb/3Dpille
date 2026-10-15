@@ -44,11 +44,12 @@ class ProjectStore private constructor(context: Context) {
     fun get(id: String): Project? = _projects.value.firstOrNull { it.id == id }
 
     @Synchronized
-    fun create(name: String, densityTM3: Double?): Project {
+    fun create(name: String, densityTM3: Double?, waterCoef: Double? = null): Project {
         val p = Project(
             id = UUID.randomUUID().toString().replace("-", ""),
             name = name.trim(),
             densityTM3 = densityTM3,
+            waterCoef = waterCoef,
             createdAt = System.currentTimeMillis(),
         )
         write(p); publish(p)

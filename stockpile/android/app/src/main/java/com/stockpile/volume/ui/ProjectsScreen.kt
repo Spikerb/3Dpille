@@ -94,9 +94,9 @@ fun ProjectsScreen(onOpen: (String) -> Unit, onSettings: () -> Unit) {
     if (showNew) {
         NewProjectDialog(
             onDismiss = { showNew = false },
-            onCreate = { name, density ->
+            onCreate = { name, density, water ->
                 showNew = false
-                onOpen(store.create(name, density).id)
+                onOpen(store.create(name, density, water).id)
             },
         )
     }
@@ -145,9 +145,12 @@ fun formatInstant(iso: String): String = runCatching {
 }.getOrDefault(iso)
 
 @Composable
-private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, Double?) -> Unit) {
+private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, Double?, Double?) -> Unit) {
     var name by remember { mutableStateOf("") }
     var density by remember { mutableStateOf("") }
+    var water by remember { mutableStateOf("") }
+    val waterValue = parseWaterCoef(water)
+    val waterOk = water.isBlank() || waterValue != null
     val densityValue = density.replace(',', '.').toDoubleOrNull()
     val densityOk = density.isBlank() || (densityValue != null && densityValue > 0 && densityValue < 10)
     AlertDialog(
@@ -163,14 +166,33 @@ private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, Double?) 
                     isError = !densityOk, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 )
+                WaterField(water, waterOk) { water = it }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = name.isNotBlank() && densityOk,
-                onClick = { onCreate(name, if (density.isBlank()) null else densityValue) },
+                enabled = name.isNotBlank() && densityOk && waterOk,
+                onClick = { onCreate(name, if (density.isBlank()) null else densityValue, waterValue) },
             ) { Text("Vytvořit") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Zrušit") } },
+    )
+}
+
+/** Volumetric water fraction: a decimal number 0 ≤ k < 1 (comma or dot). Null when blank or invalid. */
+fun parseWaterCoef(s: String): Double? =
+    s.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it >= 0.0 && it < 1.0 }
+
+@Composable
+fun WaterField(value: String, ok: Boolean, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value, onChange,
+        label = { Text("Koeficient vody (nepovinné)") },
+        supportingText = {
+            Text(if (ok) "podíl vody v objemu, číslo menší než 1 – např. 0,12 = 12 % objemu je voda"
+                 else "Zadejte desetinné číslo od 0 do 0,99 (např. 0,12)")
+        },
+        isError = !ok, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
     )
 }

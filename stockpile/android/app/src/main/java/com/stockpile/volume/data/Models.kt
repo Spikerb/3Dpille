@@ -9,6 +9,8 @@ data class Project(
     val id: String,
     val name: String,
     val densityTM3: Double? = null,
+    /** Volumetric water fraction 0 ≤ k < 1 (e.g. 0.12 = 12 % of the volume is water). */
+    val waterCoef: Double? = null,
     val createdAt: Long,
 
     // ---- On-phone (ARCore) measurement
@@ -87,6 +89,14 @@ data class MeasurementRecord(
     val warnings: List<String> = emptyList(),
     /** Manual measurement only: the dimensions the user entered (metres). */
     val inputs: Map<String, Double>? = null,
+    /** Volumetric water fraction 0 ≤ k < 1 entered by the user. */
+    val waterCoef: Double? = null,
+    /** Water in the pile: volume × waterCoef (m³; 1 m³ of water ≈ 1 t). */
+    val waterM3: Double? = null,
+    /** Volume without water: volume × (1 − waterCoef). */
+    val dryVolumeM3: Double? = null,
+    /** Dry mass: tonnes − water mass (only when a bulk density was given). */
+    val dryTonnes: Double? = null,
 )
 
 /** Where the record hash was anchored on the XRP Ledger. */

@@ -115,8 +115,14 @@ typu `stockpile-volume/1` ve formátu JSON:
 ```json
 {"sha256":"…","id":"…","name":"Štěrk 16/32","measured_at":"2026-10-15T08:00:00Z",
  "volume_m3":523.132,"tonnes":837.01,"footprint_m2":301.7,"max_height_m":4.32,"method":"arcore-raw-depth",
+ "water_coef":0.12,"water_m3":62.776,"dry_m3":460.356,"dry_t":774.23,
  "lat":49.19500,"lon":16.66390,"gps_acc_m":1.4}
 ```
+
+**Koeficient vody** (nepovinný, číslo menší než 1, např. 0,12 = 12 % objemu je voda) zadáte
+při založení měření nebo kdykoli později v detailu. Aplikace z něj spočítá objem vody
+(`water_m3`, 1 m³ ≈ 1 t), objem bez vody (`dry_m3`) a při zadané objemové hmotnosti i sušinu
+v tunách (`dry_t`). Všechno je součástí záznamu i zápisu v blockchainu.
 
 **GPS poloha se zapisuje** na 5 desetinných míst (≈ 1 m) i s odhadem přesnosti. Pro co nejpřesnější
 polohu použijte v detailu měření **Zaměřit GPS polohu**: stůjte u hromady, aplikace až 90 s

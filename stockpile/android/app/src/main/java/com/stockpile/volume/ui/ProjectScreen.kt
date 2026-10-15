@@ -192,6 +192,8 @@ fun ProjectScreen(
 private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecord) {
     var preview by remember(m.id) { mutableStateOf<ImageBitmap?>(null) }
     var showGps by remember { mutableStateOf(false) }
+    var showWater by remember { mutableStateOf(false) }
+    var confirmWater by remember { mutableStateOf(false) }
     var confirmGps by remember { mutableStateOf(false) }
     val anchored = p.anchor != null && p.anchorMatches && p.anchor.status != ChainAnchor.REJECTED &&
         p.anchor.status != ChainAnchor.EXPIRED && p.anchor.status != ChainAnchor.FAILED
@@ -217,6 +219,20 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
                 m.inputs.forEach { (k, v) -> Stat(inputLabel(k), "${fmt(v, 2)} m") }
             }
             Stat("Metoda", m.method)
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("Voda v objemu", style = MaterialTheme.typography.labelLarge)
+            if (m.waterCoef == null) {
+                Text("Koeficient vody není zadaný.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Stat("Koeficient vody", "${fmt(m.waterCoef, 3)} (${fmt(m.waterCoef * 100, 1)} %)")
+                m.waterM3?.let { Stat("Voda", "${fmt(it, 2)} m³ ≈ ${fmt(it, 2)} t") }
+                m.dryVolumeM3?.let { Stat("Objem bez vody", "${fmt(it, 2)} m³") }
+                m.dryTonnes?.let { Stat("Sušina", "≈ ${fmt(it, 2)} t") }
+            }
+            OutlinedButton(onClick = { if (anchored) confirmWater = true else showWater = true }) {
+                Text(if (m.waterCoef == null) "Zadat koeficient vody" else "Změnit koeficient vody")
+            }
+
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text("GPS poloha", style = MaterialTheme.typography.labelLarge)
             val g = m.location
@@ -250,6 +266,42 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
         GpsFixDialog(
             onResult = { geo -> showGps = false; MeasurementSaver.updateLocation(store, p.id, geo) },
             onDismiss = { showGps = false },
+        )
+    }
+    if (showWater) {
+        var text by remember { mutableStateOf(m.waterCoef?.let { fmt(it, 3) } ?: "") }
+        val value = parseWaterCoef(text)
+        val ok = text.isBlank() || value != null
+        AlertDialog(
+            onDismissRequest = { showWater = false },
+            title = { Text("Koeficient vody") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WaterField(text, ok) { text = it }
+                    if (value != null) {
+                        Text(
+                            "Voda: ${fmt(m.volumeM3 * value, 2)} m³ · bez vody: ${fmt(m.volumeM3 * (1 - value), 2)} m³",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = ok, onClick = {
+                    showWater = false
+                    MeasurementSaver.updateWater(store, p.id, value)
+                }) { Text(if (text.isBlank()) "Odebrat" else "Uložit") }
+            },
+            dismissButton = { TextButton(onClick = { showWater = false }) { Text("Zrušit") } },
+        )
+    }
+    if (confirmWater) {
+        AlertDialog(
+            onDismissRequest = { confirmWater = false },
+            title = { Text("Měření už je v blockchainu") },
+            text = { Text("Změna koeficientu vody změní záznam, takže ho bude potřeba zapsat do blockchainu znovu. Pokračovat?") },
+            confirmButton = { TextButton(onClick = { confirmWater = false; showWater = true }) { Text("Pokračovat") } },
+            dismissButton = { TextButton(onClick = { confirmWater = false }) { Text("Zrušit") } },
         )
     }
     if (confirmGps) {
@@ -469,6 +521,10 @@ private fun shareMeasurement(context: android.content.Context, store: ProjectSto
         appendLine("Hromada: ${m.project}")
         appendLine("Objem: ${fmt(m.volumeM3, 1)} m³")
         m.tonnes?.let { appendLine("Hmotnost: ≈ ${fmt(it, 1)} t (${m.densityTM3} t/m³)") }
+        m.waterCoef?.let { k ->
+            appendLine("Koeficient vody: ${fmt(k, 3)} → voda ${fmt(m.waterM3 ?: 0.0, 2)} m³, bez vody ${fmt(m.dryVolumeM3 ?: 0.0, 2)} m³" +
+                (m.dryTonnes?.let { ", sušina ≈ ${fmt(it, 2)} t" } ?: ""))
+        }
         appendLine("Půdorys ${fmt(m.footprintM2, 0)} m², max. výška ${fmt(m.maxHeightM, 2)} m")
         appendLine("Změřeno: ${formatInstant(m.measuredAt)}")
         m.location?.let { g ->
