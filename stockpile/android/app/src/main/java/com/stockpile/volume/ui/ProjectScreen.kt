@@ -1,0 +1,406 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.stockpile.volume.ui
+
+import android.content.ClipData
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import com.stockpile.volume.chain.Anchoring
+import com.stockpile.volume.chain.Xrpl
+import com.stockpile.volume.data.ChainAnchor
+import com.stockpile.volume.data.MeasurementRecord
+import com.stockpile.volume.data.Project
+import com.stockpile.volume.data.ProjectStore
+import com.stockpile.volume.data.RemoteJob
+import com.stockpile.volume.data.Settings
+import com.stockpile.volume.measure.MeasurementSaver
+import com.stockpile.volume.work.UploadWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+@Composable
+fun ProjectScreen(
+    projectId: String,
+    onBack: () -> Unit,
+    onScan: () -> Unit,
+    onCapture: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val context = LocalContext.current
+    val store = remember { ProjectStore.get(context) }
+    val settings = remember { Settings(context) }
+    val projects by store.projects.collectAsState()
+    val p = projects.firstOrNull { it.id == projectId }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (p == null) {
+        LaunchedEffect(Unit) { onBack() }
+        return
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(p.name) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zpět") } },
+                actions = {
+                    if (p.measurement != null) {
+                        IconButton(onClick = { shareMeasurement(context, store, p) }) { Icon(Icons.Default.Share, "Sdílet") }
+                    }
+                    IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Smazat") }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            val m = p.measurement
+            if (m == null) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Změřit hromadu", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Telefon hromadu naskenuje ve 3D během obcházení a objem spočítá sám – bez internetu. " +
+                                "Hodí se pro hromady zhruba do 15 m průměru.",
+                        )
+                        Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Spustit 3D sken") }
+                    }
+                }
+            } else {
+                MeasurementCard(store, p, m)
+                OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Změřit znovu") }
+                ChainCard(p, settings, onSettings)
+            }
+
+            if (settings.isConfigured || p.photoCount > 0 || p.remote != null) {
+                ServerCard(p, settings, onCapture, onSettings)
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Smazat měření?") },
+            text = {
+                Text(
+                    "Všechna data „${p.name}“ budou z telefonu smazána." +
+                        if (p.anchor?.status == ChainAnchor.VALIDATED) " Zápis v blockchainu zůstane (nelze ho smazat), ale bez souboru record.json už nepůjde ověřit." else ""
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    WorkManager.getInstance(context).cancelUniqueWork(UploadWorker.workName(projectId))
+                    val jobId = p.remoteJobId
+                    val api = settings.client()
+                    if (jobId != null && api != null) {
+                        CoroutineScope(Dispatchers.IO).launch { runCatching { api.deleteJob(jobId) } }
+                    }
+                    store.delete(projectId)
+                    onBack()
+                }) { Text("Smazat") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Zrušit") } },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------- measurement
+
+@Composable
+private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecord) {
+    var preview by remember(m.id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(m.id) {
+        preview = withContext(Dispatchers.IO) {
+            val f = File(MeasurementSaver.measurementDir(store, p.id), MeasurementSaver.PREVIEW_FILE)
+            if (f.exists()) BitmapFactory.decodeFile(f.absolutePath)?.asImageBitmap() else null
+        }
+    }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Objem", style = MaterialTheme.typography.labelLarge)
+            Text("${fmt(m.volumeM3, 1)} m³", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+            m.tonnes?.let { Text("≈ ${fmt(it, 1)} t při ${fmt(m.densityTM3 ?: 0.0, 2)} t/m³", style = MaterialTheme.typography.titleMedium) }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Stat("Změřeno", formatInstant(m.measuredAt))
+            Stat("Půdorys", "${fmt(m.footprintM2, 0)} m²")
+            Stat("Max. výška", "${fmt(m.maxHeightM, 2)} m")
+            Stat("Naskenováno plochy", "${fmt(m.coveragePct, 0)} %")
+            Stat("Sklon / rovinnost terénu", "${fmt(m.baseSlopePct, 1)} % / ±${fmt(m.baseRmseM * 100, 0)} cm")
+            Stat("Metoda", m.method)
+            m.location?.let { Stat("Poloha", "%.5f, %.5f".format(it.lat, it.lon)) }
+            m.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            preview?.let {
+                Text("Výšková mapa (pohled shora)", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 8.dp))
+                Image(it, "Výšková mapa", Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+            }
+            Text("SHA-256: ${p.recordSha256}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------- blockchain
+
+@Composable
+private fun ChainCard(p: Project, settings: Settings, onSettings: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val a = p.anchor
+    var verification by remember { mutableStateOf<Anchoring.Verification?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
+
+    // Follow the anchor until it is final: Xaman status first, then ledger validation.
+    LaunchedEffect(a?.payloadUuid, a?.status) {
+        if (a == null || a.isFinal) return@LaunchedEffect
+        while (true) {
+            refreshError = runCatching { Anchoring.refresh(context.applicationContext, p.id) }.exceptionOrNull()?.message
+            delay(if (a.status == ChainAnchor.SIGNED) 3_000 else 5_000)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Blockchain (XRP Ledger)", style = MaterialTheme.typography.titleMedium)
+            val stale = a != null && !p.anchorMatches
+            if (a == null || stale) {
+                    if (stale) Text("Zápis patří k předchozímu měření. Nové měření zatím zapsané není.", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        "Zapíše do ${netName(settings.network)} objem, čas a otisk (SHA-256) celého záznamu. " +
+                            "Transakci potvrdíte v aplikaci Xaman; poplatek je zlomek haléře. GPS poloha se nezapisuje.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (settings.xamanApiKey.isBlank()) {
+                        Text("Nejdřív zadejte Xaman API klíč.", color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(onClick = onSettings) { Text("Otevřít nastavení") }
+                    } else {
+                        Button(onClick = { Anchoring.start(context, p.id) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (settings.xamanSignedIn) "Zapsat do blockchainu" else "Přihlásit se do Xamanu a zapsat")
+                        }
+                    }
+            } else when (a.status) {
+                ChainAnchor.PENDING -> {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(Modifier.padding(2.dp))
+                        Text("Čekám na podpis v Xamanu…")
+                    }
+                    a.signUrl?.let { url -> OutlinedButton(onClick = { Anchoring.openXaman(context, url) }) { Text("Otevřít Xaman") } }
+                    TextButton(onClick = { Anchoring.start(context, p.id) }) { Text("Vytvořit novou žádost") }
+                }
+                ChainAnchor.SIGNED -> {
+                    Text("Podepsáno, čekám na potvrzení v ledgeru…")
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    a.txid?.let { Mono("TX: $it") }
+                }
+                ChainAnchor.VALIDATED -> {
+                    Text("✓ Zapsáno a potvrzeno", color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.Bold)
+                    Stat("Síť", netName(a.network))
+                    a.ledgerIndex?.let { Stat("Ledger", "#$it") }
+                    a.account?.let { Stat("Účet", it.take(8) + "…" + it.takeLast(6)) }
+                    a.txid?.let { Mono("TX: $it") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        a.txid?.let { tx ->
+                            OutlinedButton(onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Xrpl.explorerUrl(a.network, tx))))
+                            }) { Text("Průzkumník") }
+                        }
+                        OutlinedButton(enabled = !busy, onClick = {
+                            busy = true
+                            scope.launch {
+                                verification = Anchoring.verify(context.applicationContext, p.id)
+                                busy = false
+                            }
+                        }) { Text(if (busy) "Ověřuji…" else "Ověřit") }
+                    }
+                }
+                else -> {
+                    Text(
+                        when (a.status) {
+                            ChainAnchor.REJECTED -> "Podpis byl v Xamanu odmítnut."
+                            ChainAnchor.EXPIRED -> "Žádost o podpis vypršela."
+                            else -> a.error ?: "Zápis se nezdařil."
+                        },
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Button(onClick = { Anchoring.start(context, p.id) }, modifier = Modifier.fillMaxWidth()) { Text("Zkusit znovu") }
+                }
+            }
+            refreshError?.let { Text("Stav nelze načíst: $it", style = MaterialTheme.typography.bodySmall) }
+            verification?.let { v ->
+                HorizontalDivider()
+                Text(if (v.ok) "Ověření v pořádku" else "Ověření NEPROŠLO", fontWeight = FontWeight.Bold,
+                    color = if (v.ok) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error)
+                v.lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
+}
+
+private fun netName(n: String) = if (n == Xrpl.TESTNET) "XRPL Testnet" else "XRPL Mainnet"
+
+// ---------------------------------------------------------------------------- optional server mode
+
+@Composable
+private fun ServerCard(p: Project, settings: Settings, onCapture: () -> Unit, onSettings: () -> Unit) {
+    val context = LocalContext.current
+    val store = remember { ProjectStore.get(context) }
+    val workInfos by WorkManager.getInstance(context)
+        .getWorkInfosForUniqueWorkFlow(UploadWorker.workName(p.id))
+        .collectAsState(initial = emptyList())
+    val work = workInfos.firstOrNull()
+
+    LaunchedEffect(p.remoteJobId, p.remote?.isActive) {
+        val jobId = p.remoteJobId ?: return@LaunchedEffect
+        if (p.remote?.isActive != true) return@LaunchedEffect
+        val api = settings.client() ?: return@LaunchedEffect
+        while (true) {
+            runCatching { api.getJob(jobId) }.onSuccess { job ->
+                store.update(p.id) { it.copy(remote = job) }
+                if (!job.isActive) return@LaunchedEffect
+            }
+            delay(8_000)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Fotogrammetrie na serveru (volitelné)", style = MaterialTheme.typography.titleMedium)
+            Text("Pro velké hromady: fotky se zpracují na vašem serveru (OpenDroneMap).", style = MaterialTheme.typography.bodySmall)
+            Text("${p.photoCount} fotek · ${p.coveredSectors * 100 / Project.SECTORS} % dokola")
+            val remote = p.remote
+            remote?.result?.let { r ->
+                Text("Výsledek serveru: ${fmt(r.volumeM3, 1)} m³" + (r.tonnes?.let { " · ${fmt(it, 1)} t" } ?: ""), fontWeight = FontWeight.Bold)
+            }
+            val canAdd = remote == null || remote.status in setOf(RemoteJob.CREATED, RemoteJob.FAILED)
+            val uploading = work?.state == WorkInfo.State.RUNNING || work?.state == WorkInfo.State.ENQUEUED
+            when {
+                work?.state == WorkInfo.State.RUNNING -> {
+                    val done = work!!.progress.getInt(UploadWorker.KEY_DONE, 0)
+                    val total = work!!.progress.getInt(UploadWorker.KEY_TOTAL, p.photoCount).coerceAtLeast(1)
+                    Text("Nahrávám $done / $total…")
+                    LinearProgressIndicator(progress = { done / total.toFloat() }, modifier = Modifier.fillMaxWidth())
+                }
+                work?.state == WorkInfo.State.ENQUEUED -> Text("Čekám na připojení k internetu…")
+                remote != null && remote.isActive -> {
+                    Text("Server zpracovává… ${remote.progress} %")
+                    LinearProgressIndicator(progress = { remote.progress / 100f }, modifier = Modifier.fillMaxWidth())
+                }
+                remote?.status == RemoteJob.FAILED -> Text("Zpracování na serveru selhalo.", color = MaterialTheme.colorScheme.error)
+                work?.state == WorkInfo.State.FAILED ->
+                    Text(work!!.outputData.getString(UploadWorker.KEY_ERROR) ?: "Nahrávání selhalo.", color = MaterialTheme.colorScheme.error)
+            }
+            if (canAdd && !uploading) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onCapture) { Text(if (p.photoCount == 0) "Fotit" else "Další fotky") }
+                    if (!settings.isConfigured) OutlinedButton(onClick = onSettings) { Text("Nastavit server") }
+                    else Button(enabled = p.photoCount >= 10, onClick = { UploadWorker.enqueue(context, p.id) }) { Text("Odeslat") }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------- helpers
+
+@Composable
+private fun Stat(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Mono(text: String) = Text(text, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+
+/** Shares record.json, the height map and the raw grid, plus a short text summary. */
+private fun shareMeasurement(context: android.content.Context, store: ProjectStore, p: Project) {
+    val m = p.measurement ?: return
+    val dir = MeasurementSaver.measurementDir(store, p.id)
+    val auth = context.packageName + ".files"
+    val uris = arrayListOf<Uri>()
+    listOf(MeasurementSaver.RECORD_FILE, MeasurementSaver.PREVIEW_FILE, MeasurementSaver.HEIGHTMAP_FILE).forEach { name ->
+        val f = File(dir, name)
+        if (f.exists()) uris += FileProvider.getUriForFile(context, auth, f)
+    }
+    val text = buildString {
+        appendLine("Hromada: ${m.project}")
+        appendLine("Objem: ${fmt(m.volumeM3, 1)} m³")
+        m.tonnes?.let { appendLine("Hmotnost: ≈ ${fmt(it, 1)} t (${m.densityTM3} t/m³)") }
+        appendLine("Půdorys ${fmt(m.footprintM2, 0)} m², max. výška ${fmt(m.maxHeightM, 2)} m")
+        appendLine("Změřeno: ${formatInstant(m.measuredAt)}")
+        appendLine("SHA-256 záznamu: ${p.recordSha256}")
+        val a = p.anchor
+        if (a != null && a.status == ChainAnchor.VALIDATED && a.txid != null && p.anchorMatches) {
+            append("Zapsáno v XRP Ledger: ${Xrpl.explorerUrl(a.network, a.txid)}")
+        }
+    }
+    val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = "*/*"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        putExtra(Intent.EXTRA_TEXT, text)
+        putExtra(Intent.EXTRA_SUBJECT, "Měření hromady ${m.project}")
+        if (uris.isNotEmpty()) {
+            clipData = ClipData.newRawUri("", uris[0]).also { c -> uris.drop(1).forEach { c.addItem(ClipData.Item(it)) } }
+        }
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Sdílet měření"))
+}

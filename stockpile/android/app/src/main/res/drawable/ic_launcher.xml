@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple app icon: a pile with a measuring arc. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#1F4E5F" android:pathData="M0,0h108v108h-108z" />
+    <path android:fillColor="#E0A44A" android:pathData="M14,82 L42,38 Q54,26 66,38 L94,82 Z" />
+    <path android:fillColor="#C4842F" android:pathData="M54,32 Q60,33 66,38 L94,82 L62,82 Z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:fillColor="#00000000"
+        android:pathData="M18,90 L90,90" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:fillColor="#00000000"
+        android:pathData="M18,86 L18,94 M90,86 L90,94" />
+</vector>

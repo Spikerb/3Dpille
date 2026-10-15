@@ -1,0 +1,26 @@
+services:
+  nodeodm:
+    image: opendronemap/nodeodm:latest
+    restart: unless-stopped
+    # Not exposed to the internet - only the API talks to it.
+    expose: ["3000"]
+    volumes:
+      - nodeodm-data:/var/www/data
+    # Uncomment if the host has an NVIDIA GPU (and use image opendronemap/nodeodm:gpu):
+    # deploy: { resources: { reservations: { devices: [ { capabilities: [gpu] } ] } } }
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on: [nodeodm]
+    ports: ["8080:8080"]
+    environment:
+      API_KEY: ${API_KEY:?Set API_KEY in .env}
+      NODEODM_URL: http://nodeodm:3000
+      POLL_SECONDS: "15"
+      # ODM_OPTIONS: '{"pc-quality":"ultra"}'
+    volumes:
+      - ./data:/data
+
+volumes:
+  nodeodm-data:
