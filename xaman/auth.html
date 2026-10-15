@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Přihlášení do Xamanu – Objem hromady</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f6f7; color: #1f2a30; margin: 0;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .card { background: #fff; border-radius: 16px; padding: 28px 24px; max-width: 380px; width: 100%;
+          box-shadow: 0 2px 12px rgba(0,0,0,.08); text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 0 0 20px; color: #55636b; line-height: 1.45; }
+  a.btn { display: block; background: #1f4e5f; color: #fff; text-decoration: none; padding: 14px;
+          border-radius: 12px; font-weight: 600; }
+</style>
+</head>
+<body data-path="auth">
+  <div class="card">
+    <h1>Přihlášení do Xamanu dokončeno</h1>
+    <p>Vracím vás do aplikace Objem hromady…<br>Pokud se neotevře sama, klepněte na tlačítko.</p>
+    <a id="open" class="btn" href="stockpilevolume://xaman/auth">Otevřít aplikaci</a>
+  </div>
+  <script src="redirect.js"></script>
+</body>
+</html>

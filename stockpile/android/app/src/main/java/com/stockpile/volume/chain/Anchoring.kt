@@ -97,7 +97,7 @@ object Anchoring {
             putJsonObject("options") {
                 put("submit", true)
                 put("force_network", settings.network)
-                putJsonObject("return_url") { put("app", Xaman.RETURN_URL) }
+                putJsonObject("return_url") { put("app", Xaman.RETURN_URL); put("web", Xaman.RETURN_URL) }
             }
             putJsonObject("custom_meta") {
                 put("identifier", "sv-" + UUID.randomUUID().toString().replace("-", "").take(32))

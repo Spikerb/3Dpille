@@ -85,7 +85,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Blockchain – Xaman / XRP Ledger", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Na apps.xumm.dev si zaregistrujte aplikaci, vložte sem její API Key (Secret nepotřebujete) " +
-                    "a do „Redirect URIs“ i „Return URL“ přidejte: ${Xaman.REDIRECT_URI} a stockpilevolume://xaman/signed",
+                    "a do „Redirect URIs“ / „Return URL“ přidejte: ${Xaman.REDIRECT_URI} a ${Xaman.PAGES_BASE}/signed.html",
                 style = MaterialTheme.typography.bodySmall,
             )
             OutlinedTextField(

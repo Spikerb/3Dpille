@@ -32,12 +32,16 @@ class XamanException(message: String, val authExpired: Boolean = false) : IOExce
  *    (the API secret must never be shipped inside an app);
  *  - the resulting 24 h JWT creates sign requests ("payloads") via the /api/v1/jwt endpoints.
  *
- * In the Xaman Developer Console (https://apps.xumm.dev) the app's redirect URIs must include
- * [REDIRECT_URI] and the return URL scheme `stockpilevolume://`.
+ * In the Xaman Developer Console (https://apps.xumm.dev) the app's redirect URIs / return URLs must
+ * include [REDIRECT_URI] and the signed page under [PAGES_BASE].
  */
 object Xaman {
-    const val REDIRECT_URI = "stockpilevolume://xaman/auth"
-    const val RETURN_URL = "stockpilevolume://xaman/signed?payload={id}"
+    // Xaman's developer console only accepts https:// return addresses, so Xaman returns to two small
+    // pages on GitHub Pages (repo folder /xaman) which immediately hand the result to the app via
+    // stockpilevolume://xaman/auth and stockpilevolume://xaman/signed (see AndroidManifest).
+    const val PAGES_BASE = "https://spikerb.github.io/3Dpille/xaman"
+    const val REDIRECT_URI = "$PAGES_BASE/auth.html"
+    const val RETURN_URL = "$PAGES_BASE/signed.html?payload={id}"
     private const val AUTH_URL = "https://oauth2.xumm.app/auth"
     private const val TOKEN_URL = "https://oauth2.xumm.app/token"
     private const val USERINFO_URL = "https://oauth2.xumm.app/userinfo"

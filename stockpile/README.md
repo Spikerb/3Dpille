@@ -51,9 +51,12 @@ server/    volitelný zpracovací server (Python + OpenDroneMap), na později
 ## 3. Nastavení Xamanu (jednorázově, asi 5 minut)
 
 1. Na [apps.xumm.dev](https://apps.xumm.dev) se přihlaste Xamanem a vytvořte aplikaci.
-2. Do povolených adres pro návrat (*Redirect URIs* a *Return URL*) přidejte:
-   - `stockpilevolume://xaman/auth`
-   - `stockpilevolume://xaman/signed`
+2. Do povolených adres pro návrat (*Redirect URIs* / *Return URL*) přidejte:
+   - `https://spikerb.github.io/3Dpille/xaman/auth.html`
+   - `https://spikerb.github.io/3Dpille/xaman/signed.html`
+
+   Jsou to dvě malé stránky ze složky `xaman/` v repozitáři (GitHub Pages), které výsledek
+   z Xamanu hned předají aplikaci. Xaman přijímá jen adresy začínající `https://`.
 3. Zkopírujte **API Key** a vložte ho v aplikaci: **Nastavení → Xaman API Key**.
    **API Secret do aplikace nepatří a nepotřebujete ho.** Přihlášení probíhá přes OAuth2 PKCE,
    kterému stačí veřejný klíč.
