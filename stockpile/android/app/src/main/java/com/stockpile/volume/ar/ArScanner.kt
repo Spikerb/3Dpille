@@ -36,6 +36,8 @@ data class ScanStats(
     val voxels: Int = 0,
     val pathLengthM: Double = 0.0,
     val distanceToStartM: Double = 0.0,
+    /** % of directions (36 × 10° sectors) around the walked area that the path has covered. */
+    val aroundPct: Int = 0,
     val loopClosed: Boolean = false,
     val full: Boolean = false,
 )
@@ -220,15 +222,30 @@ class ArScanner(val session: Session, val depthSource: DepthSource, private val 
     }
 
     private fun publishStats(x: Float, z: Float) {
-        val start = synchronized(path) { path.firstOrNull() }
+        val pts = pathSnapshot()
+        val start = pts.firstOrNull()
         val toStart = if (start == null) 0.0 else hypot((x - start.x).toDouble(), (z - start.z).toDouble())
-        val closed = pathLen > 10.0 && toStart < 1.5
+        // Robust to ARCore drift: instead of "back at the start point", count from how many
+        // directions (around the centre of the walked path) the pile has been seen.
+        var around = 0
+        if (pts.size >= 10) {
+            val cx = pts.sumOf { it.x.toDouble() } / pts.size
+            val cz = pts.sumOf { it.z.toDouble() } / pts.size
+            val sectors = BooleanArray(36)
+            for (p in pts) {
+                val a = Math.toDegrees(kotlin.math.atan2(p.z - cz, p.x - cx)).let { (it + 360.0) % 360.0 }
+                sectors[(a / 10).toInt().coerceIn(0, 35)] = true
+            }
+            around = sectors.count { it } * 100 / 36
+        }
+        val closed = pathLen > 6.0 && (around >= 90 || (around >= 75 && toStart < 3.0))
         _stats.value = ScanStats(
             tracking = true,
             hint = if (cloud.isFull) "Paměť skenu je plná – dokončete měření." else null,
             voxels = cloud.size,
             pathLengthM = pathLen,
             distanceToStartM = toStart,
+            aroundPct = around,
             loopClosed = closed || _stats.value.loopClosed,
             full = cloud.isFull,
         )

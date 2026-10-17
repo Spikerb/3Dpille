@@ -89,4 +89,85 @@ object Xrpl {
             memos = memos,
         )
     }
+
+    // ------------------------------------------------------------------ registry (duplicate check)
+
+    private fun rpc(network: String, method: String, params: JsonObject): JsonObject {
+        val body = buildJsonObject {
+            put("method", method)
+            put("params", buildJsonArray { add(params) })
+        }.toString().toRequestBody("application/json".toMediaType())
+        var lastError: Exception? = null
+        for (url in nodes[network] ?: nodes.getValue(MAINNET)) {
+            try {
+                val text = http.newCall(Request.Builder().url(url).post(body).build()).execute().use {
+                    if (!it.isSuccessful) throw IOException("HTTP ${it.code}")
+                    it.body?.string().orEmpty()
+                }
+                val result = json.parseToJsonElement(text).jsonObject["result"]?.jsonObject
+                    ?: throw IOException("prázdná odpověď")
+                val err = result["error"]?.jsonPrimitive?.contentOrNull
+                if (err != null && err != "actNotFound") throw IOException(err)
+                return result
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw IOException("XRPL uzel nedostupný: ${lastError?.message}")
+    }
+
+    /**
+     * All successful measurement records sent to [registry] since [since], newest first.
+     * Reads the registry's whole history page by page until it reaches older ledgers.
+     */
+    suspend fun registryEntries(network: String, registry: String, since: java.time.Instant): List<RegistryEntry> =
+        withContext(Dispatchers.IO) {
+            val out = ArrayList<RegistryEntry>()
+            var marker: kotlinx.serialization.json.JsonElement? = null
+            var pages = 0
+            while (pages++ < 100) {
+                val params = buildJsonObject {
+                    put("account", registry)
+                    put("ledger_index_min", -1)
+                    put("ledger_index_max", -1)
+                    put("limit", 200)
+                    put("forward", false)
+                    marker?.let { put("marker", it) }
+                }
+                val r = rpc(network, "account_tx", params)
+                if (r["error"]?.jsonPrimitive?.contentOrNull == "actNotFound") {
+                    throw IOException("Evidenční účet $registry na síti $network neexistuje (není aktivovaný).")
+                }
+                val txs = r["transactions"] as? JsonArray ?: break
+                var reachedOld = false
+                for (item in txs) {
+                    val o = item.jsonObject
+                    val tx = (o["tx_json"] ?: o["tx"])?.jsonObject ?: continue
+                    val closeTime = o["close_time_iso"]?.jsonPrimitive?.contentOrNull?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
+                        ?: tx["date"]?.jsonPrimitive?.longOrNull?.let { java.time.Instant.ofEpochSecond(it + 946_684_800L) }
+                    if (closeTime != null && closeTime.isBefore(since)) { reachedOld = true; continue }
+                    if (tx["TransactionType"]?.jsonPrimitive?.contentOrNull != "Payment") continue
+                    if (tx["Destination"]?.jsonPrimitive?.contentOrNull != registry) continue
+                    val result = o["meta"]?.jsonObject?.get("TransactionResult")?.jsonPrimitive?.contentOrNull
+                    if (result != "tesSUCCESS") continue
+                    val hash = (o["hash"] ?: tx["hash"])?.jsonPrimitive?.contentOrNull ?: ""
+                    val memos = (tx["Memos"] as? JsonArray) ?: continue
+                    for (m in memos) {
+                        val memo = m.jsonObject["Memo"]?.jsonObject ?: continue
+                        val type = memo["MemoType"]?.jsonPrimitive?.contentOrNull?.let { runCatching { Hex.utf8FromHex(it) }.getOrNull() }
+                        if (type != Anchoring.MEMO_TYPE) continue
+                        val data = memo["MemoData"]?.jsonPrimitive?.contentOrNull?.let { runCatching { Hex.utf8FromHex(it) }.getOrNull() } ?: continue
+                        val d = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+                        val lat = d["lat"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: continue
+                        val lon = d["lon"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: continue
+                        val measured = d["measured_at"]?.jsonPrimitive?.contentOrNull?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
+                            ?: closeTime ?: continue
+                        out += RegistryEntry(hash, d["id"]?.jsonPrimitive?.contentOrNull, d["name"]?.jsonPrimitive?.contentOrNull, lat, lon, measured)
+                    }
+                }
+                marker = r["marker"]
+                if (reachedOld || marker == null || txs.isEmpty()) break
+            }
+            out
+        }
 }

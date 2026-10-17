@@ -22,11 +22,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 /**
- * Writes a measurement to the XRP Ledger: an AccountSet transaction (changes nothing on the account,
- * costs ~0.00001 XRP) whose memo carries the key figures and the SHA-256 of record.json.
+ * Writes a measurement to the XRP Ledger: a 1-drop Payment to the shared registry address
+ * (fee ~0.00001 XRP) whose memo carries the key figures and the SHA-256 of record.json.
+ * Before that, the registry history is checked so a place is written once per 30 m / 100 days.
  * The user approves it in Xaman; we then confirm it independently on public XRPL nodes.
  */
 object Anchoring {
@@ -89,10 +93,52 @@ object Anchoring {
         if (MeasurementSaver.fileHash(store, projectId) != hash) {
             say("Soubor s měřením byl změněn – zápis zastaven."); return
         }
+        val registry = settings.registryAddress
+        if (!Registry.isAddress(registry)) {
+            say("Nejdřív zadejte v Nastavení evidenční XRPL adresu."); return
+        }
+        if (registry == settings.xamanAccount) {
+            say("Evidenční adresa nesmí být stejný účet, kterým podepisujete. Použijte druhý účet."); return
+        }
+        val loc = record.location ?: run { say("Měření nemá GPS polohu – nejdřív ji zaměřte."); return }
+        val now = Instant.now()
+
+        // 1) Records on this phone (also catches ones still waiting for signature).
+        val local = store.projects.value.filter { o ->
+            o.id != projectId && o.measurement?.location != null && o.anchor != null && o.anchorMatches &&
+                o.anchor.status !in setOf(ChainAnchor.REJECTED, ChainAnchor.EXPIRED, ChainAnchor.FAILED)
+        }.mapNotNull { o ->
+            val m = o.measurement!!; val g = m.location!!
+            runCatching { RegistryEntry(o.anchor?.txid ?: "", m.id, m.project, g.lat, g.lon, Instant.parse(m.measuredAt)) }.getOrNull()
+        }
+        // 2) Records of all users on the ledger.
+        say("Kontroluji v blockchainu, zda tu už zápis není…")
+        val remote = try {
+            Xrpl.registryEntries(settings.network, registry, now.minus(Registry.WINDOW_DAYS, ChronoUnit.DAYS))
+        } catch (e: Exception) {
+            say("Kontrolu duplicit nelze provést (${e.message}). Zápis zastaven, zkuste to znovu."); return
+        }
+        if (remote.any { it.recordId == record.id }) {
+            say("Toto měření už v blockchainu zapsané je."); return
+        }
+        Registry.findConflict(local + remote, loc.lat, loc.lon, now)?.let { c ->
+            val fmt = DateTimeFormatter.ofPattern("d. M. yyyy").withZone(ZoneId.systemDefault())
+            say(
+                "Zápis zablokován: ve vzdálenosti %.0f m je už zápis „%s“ z %s. Stejné místo (±%.0f m) lze zapsat jednou za %d dní – znovu od %s."
+                    .format(c.distanceM, c.entry.name ?: "?", fmt.format(c.entry.measuredAt), Registry.RADIUS_M,
+                        Registry.WINDOW_DAYS, fmt.format(c.allowedFrom))
+            )
+            return
+        }
+
         val memo = memoJson(record, hash)
         val body: JsonObject = buildJsonObject {
             putJsonObject("txjson") {
-                put("TransactionType", "AccountSet")
+                // A 1-drop payment to the shared registry address: its history is the public list
+                // of all records, used for the 30 m / 100 day duplicate check.
+                put("TransactionType", "Payment")
+                put("Destination", registry)
+                put("Amount", "1")
                 put("Memos", buildJsonArray {
                     add(buildJsonObject {
                         putJsonObject("Memo") {

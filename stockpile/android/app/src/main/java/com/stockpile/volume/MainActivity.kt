@@ -20,6 +20,7 @@ import com.stockpile.volume.ar.ArScanScreen
 import com.stockpile.volume.capture.CaptureScreen
 import com.stockpile.volume.chain.Anchoring
 import com.stockpile.volume.ui.AppTheme
+import com.stockpile.volume.ui.BoundaryEditorScreen
 import com.stockpile.volume.ui.ManualMeasureScreen
 import com.stockpile.volume.ui.ProjectScreen
 import com.stockpile.volume.ui.ProjectsScreen
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { nav.popBackStack() },
                             onScan = { nav.navigate("scan/$id") },
                             onManual = { nav.navigate("manual/$id") },
+                            onBoundary = { nav.navigate("boundary/$id") },
                             onCapture = { nav.navigate("capture/$id") },
                             onSettings = { nav.navigate("settings") },
                         )
@@ -74,6 +76,13 @@ class MainActivity : ComponentActivity() {
                         ArScanScreen(
                             projectId = it.arguments?.getString("id").orEmpty(),
                             onFinished = { nav.popBackStack() },
+                            onCancel = { nav.popBackStack() },
+                        )
+                    }
+                    composable("boundary/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) {
+                        BoundaryEditorScreen(
+                            projectId = it.arguments?.getString("id").orEmpty(),
+                            onDone = { nav.popBackStack() },
                             onCancel = { nav.popBackStack() },
                         )
                     }

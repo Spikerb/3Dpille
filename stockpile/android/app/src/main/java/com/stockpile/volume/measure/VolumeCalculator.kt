@@ -19,6 +19,16 @@ class HeightGrid(
     val heights: FloatArray,
 )
 
+/** Top-down surface of the scan: absolute heights (m, NaN = not seen) on a regular grid. */
+class SurfaceGrid(
+    val cols: Int, val rows: Int, val cell: Double,
+    val originX: Double, val originZ: Double,
+    val surface: FloatArray,
+    /** Convex hull of the walked path (x, z). */
+    val pathHull: List<DoubleArray>,
+    val pathLengthM: Double,
+)
+
 class VolumeOutcome(
     val volumeM3: Double,
     val fillM3: Double,
@@ -52,24 +62,38 @@ object VolumeCalculator {
         baseBandM: Float = 1.5f,
         minHits: Int = 2,
     ): VolumeOutcome {
+        val surface = buildSurface(cloud, path, targetCell, minHits)
+        return volumeIn(surface, surface.pathHull, BoundaryKind.WALKED_PATH, baseBandM.toDouble())
+    }
+
+    /** How the boundary was obtained – decides where the ground (base plane) is sampled. */
+    enum class BoundaryKind {
+        /** Convex hull of the walked path: ground is the band just inside it (between you and the pile). */
+        WALKED_PATH,
+        /** Drawn by the user tightly around the pile toe: ground is the band just outside it. */
+        USER,
+    }
+
+    /**
+     * Step 1: turns the voxel cloud into a top-down surface grid (absolute heights, NaN = not seen).
+     * The grid covers the walked area plus a 1 m margin and can be reused with any boundary.
+     */
+    fun buildSurface(cloud: VoxelSnapshot, path: List<Vec3>, targetCell: Float = 0.05f, minHits: Int = 2): SurfaceGrid {
         if (path.size < 3) throw MeasureException("Obejděte hromadu dokola – trasa je příliš krátká.")
         val hull = convexHull(path.map { doubleArrayOf(it.x.toDouble(), it.z.toDouble()) })
         val hullArea = polygonArea(hull)
         if (hull.size < 3 || hullArea < 2.0) throw MeasureException("Trasa neobepíná žádnou plochu – obejděte celou hromadu.")
 
-        var minX = hull.minOf { it[0] }; var maxX = hull.maxOf { it[0] }
-        var minZ = hull.minOf { it[1] }; var maxZ = hull.maxOf { it[1] }
-        // Include a margin outside the walked path: some ground there is visible too.
         val margin = 1.0
-        minX -= margin; maxX += margin; minZ -= margin; maxZ += margin
-
+        val minX = hull.minOf { it[0] } - margin; val maxX = hull.maxOf { it[0] } + margin
+        val minZ = hull.minOf { it[1] } - margin; val maxZ = hull.maxOf { it[1] } + margin
         var cell = targetCell.toDouble()
         while (((maxX - minX) / cell) * ((maxZ - minZ) / cell) > 2_500_000) cell *= 1.5
         val cols = ceil((maxX - minX) / cell).toInt()
         val rows = ceil((maxZ - minZ) / cell).toInt()
         val n = cols * rows
 
-        // ---- 1. Reliable voxels: seen several times and not isolated (kills "flying pixels").
+        // Reliable voxels: seen several times and not isolated (kills "flying pixels").
         val keySet = HashSet<Long>(cloud.size * 2)
         for (i in 0 until cloud.size) if (cloud.count[i] >= minHits) keySet.add(cloud.keys[i])
         fun neighbours(key: Long): Int {
@@ -84,7 +108,7 @@ object VolumeCalculator {
             return c
         }
 
-        // ---- 2. Surface per grid column = weighted mean of reliable voxels within 15 cm of the column top.
+        // Surface per grid column = weighted mean of reliable voxels within 15 cm of the column top.
         val top = FloatArray(n) { Float.NaN }
         val good = BooleanArray(cloud.size)
         for (i in 0 until cloud.size) {
@@ -103,43 +127,66 @@ object VolumeCalculator {
                 wSum[c] += cloud.count[i].toDouble(); ySum[c] += cloud.y[i] * cloud.count[i].toDouble()
             }
         }
-        val surface = DoubleArray(n) { if (wSum[it] > 0) ySum[it] / wSum[it] else Double.NaN }
+        val surface = FloatArray(n) { if (wSum[it] > 0) (ySum[it] / wSum[it]).toFloat() else Float.NaN }
 
-        // ---- 3. Inside mask and distance to the boundary.
+        var pathLen = 0.0
+        for (k in 1 until path.size) pathLen += hypot((path[k].x - path[k - 1].x).toDouble(), (path[k].z - path[k - 1].z).toDouble())
+        return SurfaceGrid(cols, rows, cell, minX, minZ, surface, hull, pathLen)
+    }
+
+    /** Circle boundary as a polygon (72 vertices). */
+    fun circle(cx: Double, cz: Double, r: Double): List<DoubleArray> =
+        (0 until 72).map { val a = it * 2 * Math.PI / 72; doubleArrayOf(cx + r * kotlin.math.cos(a), cz + r * kotlin.math.sin(a)) }
+
+    /** Step 2: volume of the surface inside [boundary] (any simple polygon, x/z in metres). */
+    fun volumeIn(s: SurfaceGrid, boundary: List<DoubleArray>, kind: BoundaryKind, baseBandM: Double = 1.5): VolumeOutcome {
+        if (boundary.size < 3 || polygonArea(boundary) < 0.5) throw MeasureException("Hranice je příliš malá.")
+        val cols = s.cols; val rows = s.rows; val cell = s.cell; val n = cols * rows
+        val margin = 1.0
+        val surface = DoubleArray(n) { s.surface[it].toDouble() }
+
+        // ---- Inside mask and distance to the boundary.
         val inside = BooleanArray(n)
         val edgeDist = DoubleArray(n)
         var insideCount = 0
         for (r in 0 until rows) for (c in 0 until cols) {
-            val px = minX + (c + 0.5) * cell; val pz = minZ + (r + 0.5) * cell
+            val px = s.originX + (c + 0.5) * cell; val pz = s.originZ + (r + 0.5) * cell
             val i = r * cols + c
-            inside[i] = pointInConvex(hull, px, pz)
-            edgeDist[i] = distToPolygon(hull, px, pz)
+            inside[i] = pointInPolygon(boundary, px, pz)
+            edgeDist[i] = distToPolygon(boundary, px, pz)
             if (inside[i]) insideCount++
         }
-        if (insideCount == 0) throw MeasureException("Hranice měření je prázdná.")
+        if (insideCount == 0) throw MeasureException("Hranice leží mimo naskenovanou plochu.")
 
-        // ---- 4. Base plane from the ground band along the boundary (inside up to baseBandM, outside up to 1 m).
+        // ---- Base plane: ground band along the boundary.
         val bx = ArrayList<Double>(); val bz = ArrayList<Double>(); val by = ArrayList<Double>()
-        for (r in 0 until rows) for (c in 0 until cols) {
-            val i = r * cols + c
-            if (surface[i].isNaN()) continue
-            val d = edgeDist[i]
-            if ((inside[i] && d <= baseBandM) || (!inside[i] && d <= margin)) {
-                bx.add(minX + (c + 0.5) * cell); bz.add(minZ + (r + 0.5) * cell); by.add(surface[i])
+        fun collect(test: (Int) -> Boolean) {
+            for (r in 0 until rows) for (c in 0 until cols) {
+                val i = r * cols + c
+                if (surface[i].isNaN() || !test(i)) continue
+                bx.add(s.originX + (c + 0.5) * cell); bz.add(s.originZ + (r + 0.5) * cell); by.add(surface[i])
+            }
+        }
+        when (kind) {
+            BoundaryKind.WALKED_PATH -> collect { i -> (inside[i] && edgeDist[i] <= baseBandM) || (!inside[i] && edgeDist[i] <= margin) }
+            BoundaryKind.USER -> {
+                collect { i -> !inside[i] && edgeDist[i] in 0.1..baseBandM }
+                if (bx.size < 200) collect { i -> !inside[i] && edgeDist[i] in baseBandM..(baseBandM * 2) }
             }
         }
         if (bx.size < 200) throw MeasureException(
-            "Kolem hromady je naskenováno příliš málo terénu. Při obcházení mířte i na zem mezi sebou a patou hromady."
+            if (kind == BoundaryKind.USER) "Kolem nakreslené hranice je naskenováno příliš málo terénu. Nakreslete hranici tak, aby kolem ní byla vidět zem."
+            else "Kolem hromady je naskenováno příliš málo terénu. Při obcházení mířte i na zem mezi sebou a patou hromady."
         )
         val plane = robustPlane(bx.toDoubleArray(), bz.toDoubleArray(), by.toDoubleArray())
 
-        // ---- 5. Fill unseen cells inside the boundary, layer by layer from the known neighbours.
+        // ---- Fill unseen cells inside the boundary, layer by layer from the known neighbours.
         var observedInside = 0
         for (i in 0 until n) if (inside[i] && !surface[i].isNaN()) observedInside++
         val coverage = observedInside * 100.0 / insideCount
         fillHoles(surface, inside, cols, rows)
 
-        // ---- 6. Integrate.
+        // ---- Integrate.
         val heights = FloatArray(n) { Float.NaN }
         val area = cell * cell
         var fill = 0.0; var cut = 0.0; var footprint = 0.0; var maxH = 0.0
@@ -147,9 +194,9 @@ object VolumeCalculator {
         for (r in 0 until rows) for (c in 0 until cols) {
             val i = r * cols + c
             if (!inside[i]) continue
-            val px = minX + (c + 0.5) * cell; val pz = minZ + (r + 0.5) * cell
-            val s = if (surface[i].isNaN()) plane.at(px, pz) else surface[i]
-            val dz = s - plane.at(px, pz)
+            val px = s.originX + (c + 0.5) * cell; val pz = s.originZ + (r + 0.5) * cell
+            val v = if (surface[i].isNaN()) plane.at(px, pz) else surface[i]
+            val dz = v - plane.at(px, pz)
             heights[i] = dz.toFloat()
             if (dz > 0) fill += dz * area else cut -= dz * area
             if (dz > 0.10) footprint += area
@@ -165,18 +212,18 @@ object VolumeCalculator {
         if (edgeHeights.size > 20) {
             edgeHeights.sort()
             if (edgeHeights[(edgeHeights.size * 0.95).toInt()] > 0.5)
-                warnings.add("Hromada sahá až k hranici – příště obcházejte dál od paty hromady.")
+                warnings.add(
+                    if (kind == BoundaryKind.USER) "Hromada sahá až k nakreslené hranici – zvažte hranici o kus větší."
+                    else "Hromada sahá až k hranici – příště obcházejte dál od paty hromady."
+                )
         }
-
-        var pathLen = 0.0
-        for (k in 1 until path.size) pathLen += hypot((path[k].x - path[k - 1].x).toDouble(), (path[k].z - path[k - 1].z).toDouble())
 
         return VolumeOutcome(
             volumeM3 = fill - cut, fillM3 = fill, cutM3 = cut, footprintM2 = footprint,
-            boundaryAreaM2 = hullArea, maxHeightM = maxH,
+            boundaryAreaM2 = polygonArea(boundary), maxHeightM = maxH,
             baseSlopePct = plane.slopePct, baseRmseM = plane.rmse, coveragePct = coverage,
-            cellSizeM = cell, pathLengthM = pathLen, warnings = warnings,
-            grid = HeightGrid(cols, rows, cell.toFloat(), minX.toFloat(), minZ.toFloat(), heights),
+            cellSizeM = cell, pathLengthM = s.pathLengthM, warnings = warnings,
+            grid = HeightGrid(cols, rows, cell.toFloat(), s.originX.toFloat(), s.originZ.toFloat(), heights),
         )
     }
 
@@ -287,12 +334,16 @@ object VolumeCalculator {
         return abs(s) / 2
     }
 
-    private fun pointInConvex(hull: List<DoubleArray>, x: Double, z: Double): Boolean {
-        for (i in hull.indices) {
-            val a = hull[i]; val b = hull[(i + 1) % hull.size]
-            if ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0]) < 0) return false
+    /** Ray casting – works for any simple polygon (convex or not). */
+    fun pointInPolygon(poly: List<DoubleArray>, x: Double, z: Double): Boolean {
+        var inside = false
+        var j = poly.size - 1
+        for (i in poly.indices) {
+            val a = poly[i]; val b = poly[j]
+            if ((a[1] > z) != (b[1] > z) && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside
+            j = i
         }
-        return true
+        return inside
     }
 
     private fun distToPolygon(poly: List<DoubleArray>, x: Double, z: Double): Double {

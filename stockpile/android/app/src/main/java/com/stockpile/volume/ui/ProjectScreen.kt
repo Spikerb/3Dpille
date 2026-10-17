@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -65,6 +66,8 @@ import com.stockpile.volume.data.ProjectStore
 import com.stockpile.volume.data.RemoteJob
 import com.stockpile.volume.data.Settings
 import com.stockpile.volume.measure.MeasurementSaver
+import com.stockpile.volume.report.Report
+import com.stockpile.volume.report.ReportLang
 import com.stockpile.volume.work.UploadWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,6 +82,7 @@ fun ProjectScreen(
     onBack: () -> Unit,
     onScan: () -> Unit,
     onManual: () -> Unit,
+    onBoundary: () -> Unit,
     onCapture: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -142,7 +146,7 @@ fun ProjectScreen(
                     }
                 }
             } else {
-                MeasurementCard(store, p, m)
+                MeasurementCard(store, p, m, onBoundary)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (arSupported != false) {
                         OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Znovu skenem") }
@@ -189,7 +193,10 @@ fun ProjectScreen(
 // ---------------------------------------------------------------------------- measurement
 
 @Composable
-private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecord) {
+private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecord, onBoundary: () -> Unit) {
+    val canEditBoundary = remember(m.id) { MeasurementSaver.hasSurface(store, p.id) }
+    var confirmBoundary by remember { mutableStateOf(false) }
+    var showReport by remember { mutableStateOf(false) }
     var preview by remember(m.id) { mutableStateOf<ImageBitmap?>(null) }
     var showGps by remember { mutableStateOf(false) }
     var showWater by remember { mutableStateOf(false) }
@@ -219,6 +226,17 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
                 m.inputs.forEach { (k, v) -> Stat(inputLabel(k), "${fmt(v, 2)} m") }
             }
             Stat("Metoda", m.method)
+            if (canEditBoundary) {
+                Text(
+                    if (m.boundary == null) "Hranice: trasa obchůzky (může zahrnout i okolní předměty)"
+                    else "Hranice: nakreslená – " + m.boundary.replace("circle r=", "kružnice r = ").replace("polygon", "mnohoúhelník").replace(" pts", " bodů"),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = { if (anchored) confirmBoundary = true else onBoundary() }) {
+                    Text(if (m.boundary == null) "Ohraničit hromadu (kružnice / přímky)" else "Upravit hranici hromady")
+                }
+            }
+
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text("Voda v objemu", style = MaterialTheme.typography.labelLarge)
             if (m.waterCoef == null) {
@@ -259,8 +277,12 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
                 Image(it, "Výšková mapa", Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
             }
             Text("SHA-256: ${p.recordSha256}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            Button(onClick = { showReport = true }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Text("Závěrečný protokol (PDF)")
+            }
         }
     }
+    if (showReport) ReportDialog(p) { showReport = false }
 
     if (showGps) {
         GpsFixDialog(
@@ -293,6 +315,15 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
                 }) { Text(if (text.isBlank()) "Odebrat" else "Uložit") }
             },
             dismissButton = { TextButton(onClick = { showWater = false }) { Text("Zrušit") } },
+        )
+    }
+    if (confirmBoundary) {
+        AlertDialog(
+            onDismissRequest = { confirmBoundary = false },
+            title = { Text("Měření už je v blockchainu") },
+            text = { Text("Nová hranice změní objem i záznam, takže ho bude potřeba zapsat do blockchainu znovu. Pokračovat?") },
+            confirmButton = { TextButton(onClick = { confirmBoundary = false; onBoundary() }) { Text("Pokračovat") } },
+            dismissButton = { TextButton(onClick = { confirmBoundary = false }) { Text("Zrušit") } },
         )
     }
     if (confirmWater) {
@@ -353,7 +384,16 @@ private fun ChainCard(p: Project, settings: Settings, onSettings: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    if (settings.xamanApiKey.isBlank()) {
+                    Text(
+                        "Pravidlo: stejné místo (±30 m) lze zapsat jen jednou za 100 dní – aplikace to před zápisem ověří v blockchainu.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (p.measurement?.location == null) {
+                        Text("Pro zápis je potřeba GPS poloha – zaměřte ji výše.", color = MaterialTheme.colorScheme.error)
+                    } else if (!com.stockpile.volume.chain.Registry.isAddress(settings.registryAddress)) {
+                        Text("Nejdřív zadejte v Nastavení evidenční XRPL adresu.", color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(onClick = onSettings) { Text("Otevřít nastavení") }
+                    } else if (settings.xamanApiKey.isBlank()) {
                         Text("Nejdřív zadejte Xaman API klíč.", color = MaterialTheme.colorScheme.error)
                         OutlinedButton(onClick = onSettings) { Text("Otevřít nastavení") }
                     } else {
@@ -548,4 +588,54 @@ private fun shareMeasurement(context: android.content.Context, store: ProjectSto
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(intent, "Sdílet měření"))
+}
+
+@Composable
+private fun ReportDialog(p: Project, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val settings = remember { Settings(context) }
+    val scope = rememberCoroutineScope()
+    var lang by remember { mutableStateOf(ReportLang.of(settings.reportLanguage)) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Závěrečný protokol") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Jazyk protokolu", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ReportLang.entries.forEach { l ->
+                        FilterChip(selected = lang == l, onClick = { lang = l }, label = { Text(l.label) })
+                    }
+                }
+                if (p.anchor?.status != ChainAnchor.VALIDATED || !p.anchorMatches) {
+                    Text("Měření zatím není potvrzené v blockchainu – protokol to uvede.", style = MaterialTheme.typography.bodySmall)
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy, onClick = {
+                busy = true
+                settings.reportLanguage = lang.code
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { runCatching { Report.build(context, p, lang) } }
+                    busy = false
+                    r.onSuccess { f ->
+                        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/pdf"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            putExtra(Intent.EXTRA_SUBJECT, f.nameWithoutExtension)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(send, "Protokol"))
+                        onClose()
+                    }.onFailure { error = "Protokol se nepodařilo vytvořit: ${it.message}" }
+                }
+            }) { Text(if (busy) "Vytvářím…" else "Vytvořit a sdílet") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Zrušit") } },
+    )
 }

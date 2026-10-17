@@ -78,6 +78,27 @@ server/    volitelný zpracovací server (Python + OpenDroneMap), na později
 3. **Dokončit měření** → aplikace spočítá objem, půdorys, max. výšku a výškovou mapu
    a upozorní na problémy (nerovný terén, málo naskenovaných míst, hromada až u hranice trasy).
 
+### Ohraničení hromady (kružnice / přímky)
+
+Když sken zachytí i okolní předměty (auta, jiné hromady, stěny), v detailu měření klepněte na
+**Ohraničit hromadu**. Uvidíte naskenovanou plochu shora a hromadu ohraničíte:
+- **kružnicí** – klepněte na střed a pak na okraj těsně za patou hromady, nebo
+- **mnohoúhelníkem** – klepejte body kolem paty, spojí se rovnými čarami.
+
+**Spočítat objem v hranici** ukáže nový objem, **Uložit** ho nastaví jako výsledek měření.
+Terén se v tomto případě měří v pásu těsně **vně** nakreslené hranice, proto ji nakreslete tak,
+aby kolem ní byla vidět zem. (V testu s hromadou obklopenou dalšími předměty dala obchůzka
++30 % objemu, nakreslená hranice odchylku 0,1 %.)
+
+Během skenu aplikace ukazuje **„Obejito X %“** – z kolika směrů jste hromadu prošli. Okruh se
+uzavře při ~90 %, není nutné trefit přesně místo startu.
+
+### Závěrečný protokol (PDF)
+
+V detailu měření **Závěrečný protokol (PDF)** vytvoří protokol v **angličtině** (výchozí),
+**němčině** nebo **češtině**: objem, hmotnost, voda, GPS, hranice, kvalita měření, upozornění,
+výšková mapa, SHA-256 a údaje o zápisu v blockchainu včetně postupu ověření.
+
 ### Jak se objem počítá
 
 Stejnou metodou jako server:
@@ -109,7 +130,7 @@ V detailu měření → **Zapsat do blockchainu**:
 3. Xaman vás vrátí do aplikace. Ta počká na validovaný ledger a zkontroluje, že transakce
    uspěla (`tesSUCCESS`) a obsahuje hash měření. Stav se změní na **✓ Zapsáno a potvrzeno**.
 
-**Co se zapisuje (veřejně):** transakce `AccountSet` (na účtu nic nemění) s poznámkou (Memo)
+**Co se zapisuje (veřejně):** platba 1 drop (0,000001 XRP) na společnou **evidenční adresu** s poznámkou (Memo)
 typu `stockpile-volume/1` ve formátu JSON:
 
 ```json
@@ -130,6 +151,19 @@ sbírá a průměruje GPS a ukáže poctivý odhad přesnosti (zeleně při ±1 
 běžně ±2–5 m; spolehlivě 1 m a lépe zajistí externí GNSS/RTK přijímač připojený přes Bluetooth
 a nastavený v Androidu jako poskytovatel polohy (aplikace ho pak využije automaticky).
 Uvědomte si, že **název hromady i poloha jsou veřejné**.
+
+### Jedno místo jednou za 100 dní
+
+Stejné místo (do **30 m**) lze zapsat jen **jednou za 100 dní** – pro všechny uživatele.
+Všechny zápisy chodí na jednu **evidenční XRPL adresu** (Nastavení → Evidenční XRPL adresa,
+zvlášť pro Mainnet a Testnet). Před každým zápisem aplikace přečte z ledgeru historii této adresy
+za posledních 100 dní a pokud najde zápis do 30 m, zápis zablokuje a napíše, odkdy bude možný.
+
+- Evidenční adresa musí být **jiný aktivovaný účet** než ten, kterým podepisujete
+  (např. druhý účet ve vašem Xamanu). Všichni uživatelé aplikace musí mít nastavenou **stejnou** adresu.
+- Kontrola probíhá v aplikaci. Kdo by poslal transakci ručně mimo aplikaci, pravidlo obejde –
+  takový zápis ale bude v historii evidence vidět a jde ho při auditu odhalit (je starší zápis do 30 m).
+- Pokud dva lidé zapisují stejné místo ve stejnou chvíli, platí ten, který je v ledgeru dřív.
 
 ### Ověření kýmkoli
 

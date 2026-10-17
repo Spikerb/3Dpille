@@ -20,6 +20,17 @@ class Settings(context: Context) {
         get() = str("xrpl_network", Xrpl.MAINNET)
         set(v) = put("xrpl_network", v)
 
+    /**
+     * Shared "registry" XRPL address every record is sent to (1 drop + memo). Reading its history
+     * lets the app refuse a second record within 30 m / 100 days for ALL users. One per network.
+     */
+    var registryAddress: String
+        get() = registryFor(network)
+        set(v) = setRegistryFor(network, v)
+
+    fun registryFor(net: String) = str("registry_$net")
+    fun setRegistryFor(net: String, v: String) = put("registry_$net", v.trim())
+
     var xamanJwt: String
         get() = str("xaman_jwt")
         set(v) = put("xaman_jwt", v)
@@ -51,6 +62,11 @@ class Settings(context: Context) {
     fun signOutXaman() {
         xamanJwt = ""; xamanJwtExp = 0; xamanAccount = ""
     }
+
+    /** Language of the PDF protocol: EN (default), DE or CS. */
+    var reportLanguage: String
+        get() = str("report_lang", "EN")
+        set(v) = put("report_lang", v)
 
     // ---- Optional processing server (photo mode, for later)
     var serverUrl: String

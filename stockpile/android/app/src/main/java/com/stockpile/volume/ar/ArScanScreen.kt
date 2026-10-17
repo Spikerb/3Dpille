@@ -183,8 +183,9 @@ private fun ArScanContent(projectId: String, onFinished: () -> Unit, onCancel: (
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val snap = s.cloud.snapshot()
-                    val outcome = VolumeCalculator.compute(snap, s.pathSnapshot())
-                    MeasurementSaver.save(store, projectId, outcome, s.depthSource.method, snap.size, location)
+                    val surface = VolumeCalculator.buildSurface(snap, s.pathSnapshot())
+                    val outcome = VolumeCalculator.volumeIn(surface, surface.pathHull, VolumeCalculator.BoundaryKind.WALKED_PATH)
+                    MeasurementSaver.save(store, projectId, outcome, s.depthSource.method, snap.size, location, surface = surface)
                 }
             }
             result.onSuccess { onFinished() }.onFailure { e ->
@@ -230,7 +231,7 @@ private fun ArScanContent(projectId: String, onFinished: () -> Unit, onCancel: (
             Text(
                 when {
                     stats.loopClosed -> "✓ Okruh uzavřen – můžete dokončit"
-                    stats.pathLengthM > 5 -> "Ke startu zbývá %.1f m".format(stats.distanceToStartM)
+                    stats.pathLengthM > 3 -> "Obejito %d %% – pokračujte dokola".format(stats.aroundPct)
                     else -> "Začněte obcházet hromadu"
                 },
                 color = if (stats.loopClosed) Color(0xFFB9F6CA) else Color.White,

@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.stockpile.volume.chain.Registry
 import com.stockpile.volume.chain.Xaman
 import com.stockpile.volume.chain.Xrpl
 import com.stockpile.volume.data.Settings
@@ -51,6 +52,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val settings = remember { Settings(context) }
     var xamanKey by remember { mutableStateOf(settings.xamanApiKey) }
     var network by remember { mutableStateOf(settings.network) }
+    var registry by remember { mutableStateOf(settings.registryAddress) }
     var signedIn by remember { mutableStateOf(settings.xamanSignedIn) }
     var url by remember { mutableStateOf(settings.serverUrl) }
     var key by remember { mutableStateOf(settings.apiKey) }
@@ -64,6 +66,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (xamanKey.trim() != settings.xamanApiKey || network != settings.network) settings.signOutXaman()
         settings.xamanApiKey = xamanKey
         settings.network = network
+        settings.setRegistryFor(network, registry)
         settings.serverUrl = url
         settings.apiKey = key
         settings.autoIntervalSec = interval
@@ -95,9 +98,22 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
             Text("Síť", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = network == Xrpl.MAINNET, onClick = { network = Xrpl.MAINNET }, label = { Text("Mainnet (ostrý)") })
-                FilterChip(selected = network == Xrpl.TESTNET, onClick = { network = Xrpl.TESTNET }, label = { Text("Testnet (zkoušky)") })
+                FilterChip(selected = network == Xrpl.MAINNET, onClick = { settings.setRegistryFor(network, registry); network = Xrpl.MAINNET; registry = settings.registryFor(Xrpl.MAINNET) }, label = { Text("Mainnet (ostrý)") })
+                FilterChip(selected = network == Xrpl.TESTNET, onClick = { settings.setRegistryFor(network, registry); network = Xrpl.TESTNET; registry = settings.registryFor(Xrpl.TESTNET) }, label = { Text("Testnet (zkoušky)") })
             }
+            val regOk = registry.isBlank() || Registry.isAddress(registry)
+            OutlinedTextField(
+                registry, { registry = it.trim() },
+                label = { Text("Evidenční XRPL adresa (${if (network == Xrpl.TESTNET) "Testnet" else "Mainnet"})") },
+                supportingText = {
+                    Text(
+                        if (regOk) "Společná adresa, na kterou chodí všechny zápisy (r…). Musí to být jiný, aktivovaný účet než ten, " +
+                            "kterým podepisujete. Podle ní aplikace hlídá, aby stejné místo (±30 m) šlo zapsat jen jednou za 100 dní."
+                        else "Neplatná XRPL adresa (má začínat písmenem r)."
+                    )
+                },
+                isError = !regOk, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            )
             if (signedIn) {
                 Text("Přihlášeno: ${settings.xamanAccount.ifBlank { "ano" }}", style = MaterialTheme.typography.bodyMedium)
                 TextButton(onClick = { settings.signOutXaman(); signedIn = false }) { Text("Odhlásit z Xamanu") }

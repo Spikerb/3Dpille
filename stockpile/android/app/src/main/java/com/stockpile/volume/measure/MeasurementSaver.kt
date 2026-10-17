@@ -38,9 +38,19 @@ object MeasurementSaver {
         voxels: Int,
         location: Location?,
         inputs: Map<String, Double>? = null,
+        /** Scan surface to keep for later boundary editing (null for manual measurements). */
+        surface: SurfaceGrid? = null,
+        /** When re-computing an existing scan: keep its position and time. */
+        geo: GeoPoint? = null,
+        measuredAt: String? = null,
+        boundary: String? = null,
     ): MeasurementRecord {
         val project = store.get(projectId) ?: error("Projekt neexistuje")
-        val dir = File(store.dir(projectId), "measurement").apply { deleteRecursively(); mkdirs() }
+        val dir = File(store.dir(projectId), "measurement").apply { mkdirs() }
+        // A new measurement replaces everything; a boundary re-computation (measuredAt given)
+        // keeps the stored scan surface and just overwrites the result files.
+        if (measuredAt == null) dir.listFiles()?.forEach { it.delete() }
+        surface?.let { writeSurface(dir, it) }
 
         // Height grid: little-endian float32, row-major (rows × cols), metres above base, NaN outside.
         val g = outcome.grid
@@ -53,11 +63,11 @@ object MeasurementSaver {
         val record = MeasurementRecord(
             id = UUID.randomUUID().toString(),
             project = project.name,
-            measuredAt = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString(),
+            measuredAt = measuredAt ?: Instant.now().truncatedTo(ChronoUnit.SECONDS).toString(),
             method = method,
             device = "${Build.MANUFACTURER} ${Build.MODEL}",
             app = "StockpileVolume ${BuildConfig.VERSION_NAME}",
-            location = location?.let { GeoPoint(GeoAverage.round5(it.latitude), GeoAverage.round5(it.longitude), r1(it.accuracy.toDouble())) },
+            location = geo ?: location?.let { GeoPoint(GeoAverage.round5(it.latitude), GeoAverage.round5(it.longitude), r1(it.accuracy.toDouble())) },
             volumeM3 = r3(outcome.volumeM3),
             fillM3 = r3(outcome.fillM3),
             cutM3 = r3(outcome.cutM3),
@@ -75,12 +85,56 @@ object MeasurementSaver {
             heightmap = HeightmapRef(g.cols, g.rows, r3(g.cellSize.toDouble()), HEIGHTMAP_FILE, Hex.sha256(gridFile.readBytes())),
             warnings = outcome.warnings,
             inputs = inputs,
+            boundary = boundary,
         ).let { applyWater(it, project.waterCoef) }
         val bytes = recordJson.encodeToString(record).toByteArray(Charsets.UTF_8)
         File(dir, RECORD_FILE).writeBytes(bytes)
         val hash = Hex.sha256(bytes)
         store.update(projectId) { it.copy(measurement = record, recordSha256 = hash, anchor = null) }
         return record
+    }
+
+    // ------------------------------------------------------------------ scan surface (for boundary editing)
+
+    const val SURFACE_FILE = "surface.f32"
+    const val SURFACE_META = "surface.json"
+
+    @kotlinx.serialization.Serializable
+    private data class SurfaceMeta(
+        val cols: Int, val rows: Int, val cell: Double, val originX: Double, val originZ: Double,
+        val hull: List<List<Double>>, val pathLengthM: Double, val method: String = "", val voxels: Int = 0,
+    )
+
+    private fun writeSurface(dir: File, s: SurfaceGrid, method: String = "", voxels: Int = 0) {
+        val bb = ByteBuffer.allocate(s.surface.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+        s.surface.forEach { bb.putFloat(it) }
+        File(dir, SURFACE_FILE).writeBytes(bb.array())
+        val meta = SurfaceMeta(s.cols, s.rows, s.cell, s.originX, s.originZ, s.pathHull.map { listOf(it[0], it[1]) }, s.pathLengthM, method, voxels)
+        File(dir, SURFACE_META).writeText(recordJson.encodeToString(meta))
+    }
+
+    fun hasSurface(store: ProjectStore, projectId: String) = File(measurementDir(store, projectId), SURFACE_FILE).exists()
+
+    fun loadSurface(store: ProjectStore, projectId: String): SurfaceGrid? {
+        val dir = measurementDir(store, projectId)
+        val f = File(dir, SURFACE_FILE); val mf = File(dir, SURFACE_META)
+        if (!f.exists() || !mf.exists()) return null
+        val m = recordJson.decodeFromString(SurfaceMeta.serializer(), mf.readText())
+        val bb = ByteBuffer.wrap(f.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+        val arr = FloatArray(m.cols * m.rows) { bb.getFloat() }
+        return SurfaceGrid(m.cols, m.rows, m.cell, m.originX, m.originZ, arr, m.hull.map { doubleArrayOf(it[0], it[1]) }, m.pathLengthM)
+    }
+
+    /** Re-computes a saved scan inside a user-drawn boundary and replaces the record (new hash). */
+    fun recomputeWithBoundary(store: ProjectStore, projectId: String, boundary: List<DoubleArray>, description: String): MeasurementRecord {
+        val old = store.get(projectId)?.measurement ?: throw MeasureException("Měření nenalezeno.")
+        val surface = loadSurface(store, projectId) ?: throw MeasureException("Data skenu nejsou k dispozici – hranici lze upravit jen u nových skenů.")
+        val outcome = VolumeCalculator.volumeIn(surface, boundary, VolumeCalculator.BoundaryKind.USER)
+        val method = old.method.substringBefore("+") + "+boundary"
+        return save(
+            store, projectId, outcome, method, old.voxels, location = null, inputs = null,
+            surface = null, geo = old.location, measuredAt = old.measuredAt, boundary = description,
+        )
     }
 
     /** Fills the water fields from the coefficient (or clears them when it is null). */

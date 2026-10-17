@@ -42,12 +42,48 @@ fun scenario(name: String, R: Double, H: Double, slope: Pair<Double, Double>, no
     return abs(err) < 3
 }
 
+/** Pile with other objects around it inside the walked area; user then draws a circle / polygon around the pile. */
+fun clutterScenario(): Boolean {
+    val rnd = Random(11)
+    val cloud = VoxelCloud(0.05f)
+    val R = 6.0; val H = 3.0; val walkR = 16.0
+    fun ground(x: Double, z: Double) = 0.02 * x - 0.01 * z
+    fun obj(x: Double, z: Double): Double {
+        var h = max(0.0, H * (1 - hypot(x, z) / R))
+        // two boxes 1.5 m high and a car-like block nearby
+        if (x in 9.0..11.0 && z in -1.0..1.0) h = max(h, 1.5)
+        if (x in -12.0..-9.0 && z in 4.0..6.0) h = max(h, 1.5)
+        if (x in -2.0..2.0 && z in 9.0..13.0) h = max(h, 1.2)
+        return ground(x, z) + h
+    }
+    var x = -walkR - 1
+    while (x <= walkR + 1) {
+        var z = -walkR - 1
+        while (z <= walkR + 1) {
+            if (hypot(x, z) < walkR + 1) repeat(3) { cloud.add(x.toFloat(), (obj(x, z) + rnd.nextDouble(-0.02, 0.02)).toFloat(), z.toFloat()) }
+            z += 0.05
+        }
+        x += 0.05
+    }
+    val path = (0 until 240).map { val a = it * 2 * PI / 240; Vec3((walkR * cos(a)).toFloat(), 1.5f, (walkR * sin(a)).toFloat()) }
+    val truth = PI * R * R * H / 3
+    val surface = VolumeCalculator.buildSurface(cloud.snapshot(), path)
+    val walked = VolumeCalculator.volumeIn(surface, surface.pathHull, VolumeCalculator.BoundaryKind.WALKED_PATH)
+    val circle = VolumeCalculator.volumeIn(surface, VolumeCalculator.circle(0.0, 0.0, 7.0), VolumeCalculator.BoundaryKind.USER)
+    val poly = listOf(doubleArrayOf(-7.0, -7.0), doubleArrayOf(7.0, -7.0), doubleArrayOf(7.5, 0.0), doubleArrayOf(7.0, 7.0), doubleArrayOf(-7.0, 7.0))
+    val polygon = VolumeCalculator.volumeIn(surface, poly, VolumeCalculator.BoundaryKind.USER)
+    fun e(v: Double) = (v - truth) / truth * 100
+    println("clutter: truth %.1f | walked hull %.1f (%+.1f%%) | circle r7 %.1f (%+.2f%%) | polygon %.1f (%+.2f%%)".format(
+        truth, walked.volumeM3, e(walked.volumeM3), circle.volumeM3, e(circle.volumeM3), polygon.volumeM3, e(polygon.volumeM3)))
+    return abs(e(circle.volumeM3)) < 2 && abs(e(polygon.volumeM3)) < 2 && e(walked.volumeM3) > 10
+}
+
 fun main() {
     val ok = listOf(
         scenario("cone 10m/5m, sloped, hole", 10.0, 5.0, 0.03 to -0.02, 0.03, 1.5, 12.0),
         scenario("small pile 3m/1.5m flat", 3.0, 1.5, 0.0 to 0.0, 0.02, 0.0, 4.5),
         scenario("cone 6m/3m steep ground", 6.0, 3.0, 0.08 to 0.05, 0.04, 1.0, 8.0),
-    ).all { it }
+    ).all { it } && clutterScenario()
     println(if (ok) "PASS" else "FAIL")
     if (!ok) kotlin.system.exitProcess(1)
 }

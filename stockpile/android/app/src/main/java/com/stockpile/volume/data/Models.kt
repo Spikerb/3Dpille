@@ -97,6 +97,8 @@ data class MeasurementRecord(
     val dryVolumeM3: Double? = null,
     /** Dry mass: tonnes − water mass (only when a bulk density was given). */
     val dryTonnes: Double? = null,
+    /** How the volume boundary was set, e.g. "circle r=7.00 m" (null = walked path). */
+    val boundary: String? = null,
 )
 
 /** Where the record hash was anchored on the XRP Ledger. */
