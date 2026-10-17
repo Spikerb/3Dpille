@@ -99,6 +99,10 @@ data class MeasurementRecord(
     val dryTonnes: Double? = null,
     /** How the volume boundary was set, e.g. "circle r=7.00 m" (null = walked path). */
     val boundary: String? = null,
+    /** Range-pole ground points used for the base plane (null/0 = plane fitted to the scanned ground). */
+    val groundRefPoints: Int? = null,
+    /** Pole height used for those points (m). */
+    val poleHeightM: Double? = null,
 )
 
 /** Where the record hash was anchored on the XRP Ledger. */

@@ -20,8 +20,14 @@ class VoxelCloud(val voxelSize: Float = 0.05f, private val maxVoxels: Int = 3_00
         private set
     var samples = 0L
         private set
+    private var cx = 0.0
+    private var cz = 0.0
 
     val isFull: Boolean get() = size >= maxVoxels
+
+    /** Centre (x, z) of everything scanned so far – roughly the pile the camera keeps looking at. */
+    @Synchronized
+    fun centerXZ(): Pair<Double, Double>? = if (size == 0) null else (cx / size) to (cz / size)
 
     @Synchronized
     fun add(x: Float, y: Float, z: Float) {
@@ -32,6 +38,7 @@ class VoxelCloud(val voxelSize: Float = 0.05f, private val maxVoxels: Int = 3_00
             if (size == cnt.size) grow()
             i = size++
             index[key] = i
+            cx += x; cz += z
         }
         sx[i] += x; sy[i] += y; sz[i] += z; cnt[i]++
         samples++

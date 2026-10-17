@@ -44,6 +44,7 @@ object MeasurementSaver {
         geo: GeoPoint? = null,
         measuredAt: String? = null,
         boundary: String? = null,
+        poleHeightM: Double? = null,
     ): MeasurementRecord {
         val project = store.get(projectId) ?: error("Projekt neexistuje")
         val dir = File(store.dir(projectId), "measurement").apply { mkdirs() }
@@ -86,6 +87,8 @@ object MeasurementSaver {
             warnings = outcome.warnings,
             inputs = inputs,
             boundary = boundary,
+            groundRefPoints = outcome.groundRefPoints.takeIf { it > 0 },
+            poleHeightM = poleHeightM?.takeIf { outcome.groundRefPoints > 0 },
         ).let { applyWater(it, project.waterCoef) }
         val bytes = recordJson.encodeToString(record).toByteArray(Charsets.UTF_8)
         File(dir, RECORD_FILE).writeBytes(bytes)
@@ -103,13 +106,15 @@ object MeasurementSaver {
     private data class SurfaceMeta(
         val cols: Int, val rows: Int, val cell: Double, val originX: Double, val originZ: Double,
         val hull: List<List<Double>>, val pathLengthM: Double, val method: String = "", val voxels: Int = 0,
+        val groundPoints: List<List<Double>> = emptyList(),
     )
 
     private fun writeSurface(dir: File, s: SurfaceGrid, method: String = "", voxels: Int = 0) {
         val bb = ByteBuffer.allocate(s.surface.size * 4).order(ByteOrder.LITTLE_ENDIAN)
         s.surface.forEach { bb.putFloat(it) }
         File(dir, SURFACE_FILE).writeBytes(bb.array())
-        val meta = SurfaceMeta(s.cols, s.rows, s.cell, s.originX, s.originZ, s.pathHull.map { listOf(it[0], it[1]) }, s.pathLengthM, method, voxels)
+        val meta = SurfaceMeta(s.cols, s.rows, s.cell, s.originX, s.originZ, s.pathHull.map { listOf(it[0], it[1]) }, s.pathLengthM, method, voxels,
+            s.groundPoints.map { listOf(it[0], it[1], it[2]) })
         File(dir, SURFACE_META).writeText(recordJson.encodeToString(meta))
     }
 
@@ -122,7 +127,8 @@ object MeasurementSaver {
         val m = recordJson.decodeFromString(SurfaceMeta.serializer(), mf.readText())
         val bb = ByteBuffer.wrap(f.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
         val arr = FloatArray(m.cols * m.rows) { bb.getFloat() }
-        return SurfaceGrid(m.cols, m.rows, m.cell, m.originX, m.originZ, arr, m.hull.map { doubleArrayOf(it[0], it[1]) }, m.pathLengthM)
+        return SurfaceGrid(m.cols, m.rows, m.cell, m.originX, m.originZ, arr, m.hull.map { doubleArrayOf(it[0], it[1]) }, m.pathLengthM,
+            m.groundPoints.map { doubleArrayOf(it[0], it[1], it[2]) })
     }
 
     /** Re-computes a saved scan inside a user-drawn boundary and replaces the record (new hash). */
@@ -134,6 +140,7 @@ object MeasurementSaver {
         return save(
             store, projectId, outcome, method, old.voxels, location = null, inputs = null,
             surface = null, geo = old.location, measuredAt = old.measuredAt, boundary = description,
+            poleHeightM = old.poleHeightM,
         )
     }
 

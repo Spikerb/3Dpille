@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -57,6 +58,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     var url by remember { mutableStateOf(settings.serverUrl) }
     var key by remember { mutableStateOf(settings.apiKey) }
     var interval by remember { mutableFloatStateOf(settings.autoIntervalSec) }
+    var usePole by remember { mutableStateOf(settings.poleHeightM > 0f) }
+    var pole by remember { mutableStateOf(if (settings.poleHeightM > 0f) "%.2f".format(settings.poleHeightM) else "1,50") }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     var showServer by remember { mutableStateOf(settings.isConfigured) }
@@ -70,6 +73,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         settings.serverUrl = url
         settings.apiKey = key
         settings.autoIntervalSec = interval
+        settings.poleHeightM = if (usePole) (pole.replace(',', '.').toFloatOrNull()?.takeIf { it in 0.3f..5f } ?: 1.5f) else 0f
     }
 
     Scaffold(
@@ -122,6 +126,24 @@ fun SettingsScreen(onBack: () -> Unit) {
                     enabled = xamanKey.isNotBlank(),
                     onClick = { save(); runCatching { Xaman.startSignIn(context, settings) } },
                 ) { Text("Přihlásit se do Xamanu") }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            // ---------------------------------------------------------------- range pole
+            Text("Skenování s tyčí", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Switch(checked = usePole, onCheckedChange = { usePole = it })
+                Text("Telefon je na tyči (body terénu)")
+            }
+            if (usePole) {
+                OutlinedTextField(
+                    pole, { pole = it },
+                    label = { Text("Výška tyče – od hrotu po kameru telefonu") }, suffix = { Text("m") },
+                    supportingText = { Text("Během skenu tyč postavte svisle hrotem na zem u paty hromady a klepněte na „Bod terénu“. Aspoň 4–8 bodů dokola.") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
             }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))

@@ -222,6 +222,7 @@ private fun MeasurementCard(store: ProjectStore, p: Project, m: MeasurementRecor
             if (m.inputs == null) {
                 Stat("Naskenováno plochy", "${fmt(m.coveragePct, 0)} %")
                 Stat("Sklon / rovinnost terénu", "${fmt(m.baseSlopePct, 1)} % / ±${fmt(m.baseRmseM * 100, 0)} cm")
+                Stat("Rovina terénu", m.groundRefPoints?.let { "z $it bodů tyče" } ?: "ze skenu země")
             } else {
                 m.inputs.forEach { (k, v) -> Stat(inputLabel(k), "${fmt(v, 2)} m") }
             }

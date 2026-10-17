@@ -65,6 +65,9 @@ object Report {
         "walked" to Triple("walked path around the pile", "begangener Weg um die Halde", "trasa obchůzky kolem hromady"),
         "circle" to Triple("circle drawn by the operator, r = %s m", "vom Bediener gezeichneter Kreis, r = %s m", "kružnice nakreslená obsluhou, r = %s m"),
         "polygon" to Triple("polygon of %s straight lines drawn by the operator", "vom Bediener gezeichnetes Polygon aus %s Geraden", "mnohoúhelník z %s přímek nakreslený obsluhou"),
+        "groundref" to Triple("Ground reference", "Geländebezug", "Rovina terénu"),
+        "gr_pole" to Triple("%d range-pole points (pole %s m)", "%d Messstab-Punkte (Stab %s m)", "%d bodů z tyče (tyč %s m)"),
+        "gr_scan" to Triple("fitted to the scanned ground", "aus dem gescannten Boden berechnet", "z naskenovaného terénu"),
         "barea" to Triple("Boundary area", "Fläche der Begrenzung", "Plocha hranice"),
         "quality" to Triple("Measurement quality", "Messqualität", "Kvalita měření"),
         "coverage" to Triple("Area actually scanned", "Tatsächlich gescannte Fläche", "Skutečně naskenovaná plocha"),
@@ -287,6 +290,8 @@ object Report {
         }
         w.row(t(lang, "boundary"), bText, w.text)
         if (m.inputs == null) {
+            val gr = m.groundRefPoints
+            w.row(t(lang, "groundref"), if (gr != null && gr >= 3) t(lang, "gr_pole").format(gr, nf(m.poleHeightM ?: 0.0, 2)) else t(lang, "gr_scan"), w.text)
             w.row(t(lang, "barea"), "${nf(m.boundaryAreaM2, 1)} m²", w.text)
             w.row(t(lang, "coverage"), "${nf(m.coveragePct, 0)} %", w.text)
             w.row(t(lang, "slope"), "${nf(m.baseSlopePct, 1)} % / ± ${nf(m.baseRmseM * 100, 0)} cm", w.text)

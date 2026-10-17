@@ -27,6 +27,8 @@ class SurfaceGrid(
     /** Convex hull of the walked path (x, z). */
     val pathHull: List<DoubleArray>,
     val pathLengthM: Double,
+    /** Ground points from the range pole (x, ground y, z) in recording order; may be empty. */
+    val groundPoints: List<DoubleArray> = emptyList(),
 )
 
 class VolumeOutcome(
@@ -43,6 +45,8 @@ class VolumeOutcome(
     val pathLengthM: Double,
     val warnings: List<String>,
     val grid: HeightGrid,
+    /** Number of range-pole ground points used for the base plane (0 = plane fitted to the scan). */
+    val groundRefPoints: Int = 0,
 )
 
 /**
@@ -78,7 +82,10 @@ object VolumeCalculator {
      * Step 1: turns the voxel cloud into a top-down surface grid (absolute heights, NaN = not seen).
      * The grid covers the walked area plus a 1 m margin and can be reused with any boundary.
      */
-    fun buildSurface(cloud: VoxelSnapshot, path: List<Vec3>, targetCell: Float = 0.05f, minHits: Int = 2): SurfaceGrid {
+    fun buildSurface(
+        cloud: VoxelSnapshot, path: List<Vec3>, targetCell: Float = 0.05f, minHits: Int = 2,
+        groundPoints: List<DoubleArray> = emptyList(),
+    ): SurfaceGrid {
         if (path.size < 3) throw MeasureException("Obejděte hromadu dokola – trasa je příliš krátká.")
         val hull = convexHull(path.map { doubleArrayOf(it.x.toDouble(), it.z.toDouble()) })
         val hullArea = polygonArea(hull)
@@ -131,7 +138,7 @@ object VolumeCalculator {
 
         var pathLen = 0.0
         for (k in 1 until path.size) pathLen += hypot((path[k].x - path[k - 1].x).toDouble(), (path[k].z - path[k - 1].z).toDouble())
-        return SurfaceGrid(cols, rows, cell, minX, minZ, surface, hull, pathLen)
+        return SurfaceGrid(cols, rows, cell, minX, minZ, surface, hull, pathLen, groundPoints)
     }
 
     /** Circle boundary as a polygon (72 vertices). */
@@ -174,11 +181,13 @@ object VolumeCalculator {
                 if (bx.size < 200) collect { i -> !inside[i] && edgeDist[i] in baseBandM..(baseBandM * 2) }
             }
         }
-        if (bx.size < 200) throw MeasureException(
+        val pole = s.groundPoints
+        if (pole.size < 3 && bx.size < 200) throw MeasureException(
             if (kind == BoundaryKind.USER) "Kolem nakreslené hranice je naskenováno příliš málo terénu. Nakreslete hranici tak, aby kolem ní byla vidět zem."
             else "Kolem hromady je naskenováno příliš málo terénu. Při obcházení mířte i na zem mezi sebou a patou hromady."
         )
-        val plane = robustPlane(bx.toDoubleArray(), bz.toDoubleArray(), by.toDoubleArray())
+        // Range-pole ground points (≥ 3) are far more reliable than ground seen by the depth camera.
+        val plane = if (pole.size >= 3) fitPlane(pole) else robustPlane(bx.toDoubleArray(), bz.toDoubleArray(), by.toDoubleArray())
 
         // ---- Fill unseen cells inside the boundary, layer by layer from the known neighbours.
         var observedInside = 0
@@ -204,7 +213,14 @@ object VolumeCalculator {
             if (edgeDist[i] <= 0.5) edgeHeights.add(dz)
         }
 
+        run {
+            val hs = ArrayList<Float>()
+            for (h in heights) if (!h.isNaN()) hs.add(h)
+            if (hs.size > 50) { hs.sort(); maxH = minOf(maxH, hs[((hs.size - 1) * 0.995).toInt()].toDouble()) }
+        }
+
         val warnings = ArrayList<String>()
+        if (pole.size in 1..2) warnings.add("Jen ${pole.size} bod(y) terénu z tyče – pro rovinu terénu jsou potřeba aspoň 3, použit sken země.")
         if (plane.rmse > 0.25) warnings.add("Terén kolem hromady je nerovný (±%.2f m), základní rovina může být nepřesná.".format(plane.rmse))
         if (plane.slopePct > 15) warnings.add("Sklon terénu vychází %.0f %% – zkontrolujte, zda je opravdu tak strmý.".format(plane.slopePct))
         if (coverage < 85) warnings.add("Naskenováno jen %.0f %% plochy, zbytek byl dopočten. Projděte i vyšší místa / druhé kolo.".format(coverage))
@@ -224,6 +240,7 @@ object VolumeCalculator {
             baseSlopePct = plane.slopePct, baseRmseM = plane.rmse, coveragePct = coverage,
             cellSizeM = cell, pathLengthM = s.pathLengthM, warnings = warnings,
             grid = HeightGrid(cols, rows, cell.toFloat(), s.originX.toFloat(), s.originZ.toFloat(), heights),
+            groundRefPoints = if (pole.size >= 3) pole.size else 0,
         )
     }
 
@@ -298,6 +315,27 @@ object VolumeCalculator {
             val r = y[i] - (coef[0] * (x[i] - x0) + coef[1] * (z[i] - z0) + coef[2]); ss += r * r; m++
         }
         return Plane(coef[0], coef[1], coef[2], x0, z0, if (m > 0) sqrt(ss / m) else Double.NaN)
+    }
+
+    /** Plain least-squares plane through ground points (x, y, z) – used for range-pole points. */
+    fun fitPlane(pts: List<DoubleArray>): Plane {
+        val x = DoubleArray(pts.size) { pts[it][0] }; val y = DoubleArray(pts.size) { pts[it][1] }; val z = DoubleArray(pts.size) { pts[it][2] }
+        val x0 = x.average(); val z0 = z.average()
+        var sxx = 0.0; var sxz = 0.0; var sx = 0.0; var szz = 0.0; var sz = 0.0; var s1 = 0.0
+        var sxy = 0.0; var szy = 0.0; var sy = 0.0
+        for (i in x.indices) {
+            val dx = x[i] - x0; val dz = z[i] - z0
+            sxx += dx * dx; sxz += dx * dz; sx += dx; szz += dz * dz; sz += dz; s1 += 1.0
+            sxy += dx * y[i]; szy += dz * y[i]; sy += y[i]
+        }
+        // Points (nearly) on a line can't define a tilt – fall back to a level plane at their mean height.
+        val coef = solve3(
+            arrayOf(doubleArrayOf(sxx, sxz, sx), doubleArrayOf(sxz, szz, sz), doubleArrayOf(sx, sz, s1)),
+            doubleArrayOf(sxy, szy, sy),
+        ) ?: doubleArrayOf(0.0, 0.0, y.average())
+        var ss = 0.0
+        for (i in x.indices) { val r = y[i] - (coef[0] * (x[i] - x0) + coef[1] * (z[i] - z0) + coef[2]); ss += r * r }
+        return Plane(coef[0], coef[1], coef[2], x0, z0, sqrt(ss / x.size))
     }
 
     private fun solve3(a: Array<DoubleArray>, b: DoubleArray): DoubleArray? {

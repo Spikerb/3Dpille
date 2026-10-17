@@ -109,6 +109,8 @@ private fun ArScanContent(projectId: String, onFinished: () -> Unit, onCancel: (
     var computing by remember { mutableStateOf(false) }
     var confirmOpenLoop by remember { mutableStateOf(false) }
     var computeError by remember { mutableStateOf<String?>(null) }
+    val poleHeight = remember { com.stockpile.volume.data.Settings(context).poleHeightM.takeIf { it > 0f }?.toDouble() }
+    var groundCount by remember { mutableStateOf(0) }
     val idleStats = remember { MutableStateFlow(ScanStats()) }
 
     // Keep the screen on while scanning.
@@ -183,9 +185,10 @@ private fun ArScanContent(projectId: String, onFinished: () -> Unit, onCancel: (
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val snap = s.cloud.snapshot()
-                    val surface = VolumeCalculator.buildSurface(snap, s.pathSnapshot())
+                    val surface = VolumeCalculator.buildSurface(snap, s.pathSnapshot(), groundPoints = s.groundSnapshot())
                     val outcome = VolumeCalculator.volumeIn(surface, surface.pathHull, VolumeCalculator.BoundaryKind.WALKED_PATH)
-                    MeasurementSaver.save(store, projectId, outcome, s.depthSource.method, snap.size, location, surface = surface)
+                    MeasurementSaver.save(store, projectId, outcome, s.depthSource.method, snap.size, location, surface = surface,
+                        poleHeightM = poleHeight?.takeIf { surface.groundPoints.isNotEmpty() })
                 }
             }
             result.onSuccess { onFinished() }.onFailure { e ->
@@ -237,6 +240,25 @@ private fun ArScanContent(projectId: String, onFinished: () -> Unit, onCancel: (
                 color = if (stats.loopClosed) Color(0xFFB9F6CA) else Color.White,
                 fontWeight = FontWeight.SemiBold,
             )
+            if (poleHeight != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        enabled = !computing && stats.tracking,
+                        onClick = {
+                            val n = scanner?.addGroundPoint(poleHeight) ?: -1
+                            if (n > 0) groundCount = n
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("📍 Bod terénu ($groundCount)") }
+                    if (groundCount > 0) OutlinedButton(onClick = { groundCount = scanner?.removeLastGroundPoint() ?: 0 }) { Text("Zpět", color = Color.White) }
+                }
+                Text(
+                    if (groundCount < 3) "Postavte tyč hrotem na zem u paty hromady, držte svisle a klepněte. Potřeba aspoň 3, lépe 6–8 dokola."
+                    else "Body terénu: $groundCount – rovina terénu se spočítá z nich.",
+                    color = Color(0xFFDDDDDD), fontSize = 12.sp,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onCancel, enabled = !computing) { Text("Zrušit", color = Color.White) }
                 Button(

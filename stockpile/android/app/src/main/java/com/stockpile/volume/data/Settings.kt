@@ -63,6 +63,11 @@ class Settings(context: Context) {
         xamanJwt = ""; xamanJwtExp = 0; xamanAccount = ""
     }
 
+    /** Range pole: height from the pole tip to the phone camera (m); 0 = no pole. */
+    var poleHeightM: Float
+        get() = prefs.getFloat("pole_height", 0f)
+        set(v) = prefs.edit().putFloat("pole_height", v).apply()
+
     /** Language of the PDF protocol: EN (default), DE or CS. */
     var reportLanguage: String
         get() = str("report_lang", "EN")

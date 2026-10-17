@@ -78,6 +78,16 @@ server/    volitelný zpracovací server (Python + OpenDroneMap), na později
 3. **Dokončit měření** → aplikace spočítá objem, půdorys, max. výšku a výškovou mapu
    a upozorní na problémy (nerovný terén, málo naskenovaných míst, hromada až u hranice trasy).
 
+### Skenování s tyčí (doporučeno pro přesný terén)
+
+Telefon připevněte na tyč (např. výtyčku) a v **Nastavení → Skenování s tyčí** zadejte výšku
+od hrotu tyče po kameru telefonu (např. 1,50 m). Během skenu se objeví tlačítko **📍 Bod terénu**:
+postavte tyč hrotem na zem **u paty hromady**, držte ji svisle (pomůže malá libela) a klepněte.
+Udělejte 6–8 bodů dokola. Rovina terénu se pak spočítá z těchto bodů (poloha telefonu − výška tyče)
+místo z hloubkového skenu země – výrazně přesnější sklon i objem. Body se v editoru hranice
+zobrazí jako bílé čtverečky a tlačítkem **Hranice z bodů tyče** z nich vznikne hranice hromady.
+Náklon tyče o 5° způsobí chybu výšky jen ~6 mm.
+
 ### Ohraničení hromady (kružnice / přímky)
 
 Když sken zachytí i okolní předměty (auta, jiné hromady, stěny), v detailu měření klepněte na

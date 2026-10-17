@@ -58,6 +58,28 @@ class ArScanner(val session: Session, val depthSource: DepthSource, private val 
 
     fun pathSnapshot(): List<Vec3> = synchronized(path) { ArrayList(path) }
 
+    // Latest tracked camera position (written on the GL thread, read from the UI).
+    @Volatile private var camX = Float.NaN
+    @Volatile private var camY = Float.NaN
+    @Volatile private var camZ = Float.NaN
+    private val groundPts = ArrayList<DoubleArray>()
+
+    /**
+     * Range pole standing on the ground: ground point = camera position − pole height.
+     * Returns the number of ground points, or -1 when tracking is lost.
+     */
+    fun addGroundPoint(poleHeightM: Double): Int {
+        if (camX.isNaN() || !_stats.value.tracking) return -1
+        synchronized(groundPts) {
+            groundPts.add(doubleArrayOf(camX.toDouble(), camY - poleHeightM, camZ.toDouble()))
+            return groundPts.size
+        }
+    }
+
+    fun removeLastGroundPoint(): Int = synchronized(groundPts) { if (groundPts.isNotEmpty()) groundPts.removeAt(groundPts.lastIndex); groundPts.size }
+
+    fun groundSnapshot(): List<DoubleArray> = synchronized(groundPts) { groundPts.map { it.copyOf() } }
+
     // ---------------------------------------------------------------- GL state
     private var cameraTex = 0
     private var bgProgram = 0
@@ -124,6 +146,7 @@ class ArScanner(val session: Session, val depthSource: DepthSource, private val 
             return
         }
 
+        camX = camera.pose.tx(); camY = camera.pose.ty(); camZ = camera.pose.tz()
         if (recording) {
             recordPath(camera.pose.tx(), camera.pose.ty(), camera.pose.tz())
             when (depthSource) {
@@ -228,17 +251,20 @@ class ArScanner(val session: Session, val depthSource: DepthSource, private val 
         // Robust to ARCore drift: instead of "back at the start point", count from how many
         // directions (around the centre of the walked path) the pile has been seen.
         var around = 0
-        if (pts.size >= 10) {
-            val cx = pts.sumOf { it.x.toDouble() } / pts.size
-            val cz = pts.sumOf { it.z.toDouble() } / pts.size
+        val centre = cloud.centerXZ()
+        if (pts.size >= 10 && centre != null) {
+            // Centre = middle of everything scanned (the pile you keep looking at), not of the path,
+            // so walking to the pile or ARCore drift doesn't skew the count.
+            val (cx, cz) = centre
             val sectors = BooleanArray(36)
             for (p in pts) {
+                if (hypot(p.x - cx, p.z - cz) > 15.0) continue
                 val a = Math.toDegrees(kotlin.math.atan2(p.z - cz, p.x - cx)).let { (it + 360.0) % 360.0 }
                 sectors[(a / 10).toInt().coerceIn(0, 35)] = true
             }
             around = sectors.count { it } * 100 / 36
         }
-        val closed = pathLen > 6.0 && (around >= 90 || (around >= 75 && toStart < 3.0))
+        val closed = pathLen > 6.0 && (around >= 85 || (around >= 70 && toStart < 3.0))
         _stats.value = ScanStats(
             tracking = true,
             hint = if (cloud.isFull) "Paměť skenu je plná – dokončete měření." else null,

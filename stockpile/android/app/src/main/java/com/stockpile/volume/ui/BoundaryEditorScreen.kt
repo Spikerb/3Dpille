@@ -5,6 +5,16 @@ package com.stockpile.volume.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -103,6 +113,25 @@ fun BoundaryEditorScreen(projectId: String, onDone: () -> Unit, onCancel: () -> 
 
     fun reset() { center = null; radius = null; vertices.clear(); preview = null; error = null }
 
+    // ---- view: k = pixels per metre, (cx, cz) = world point in the middle of the map
+    var viewW by remember { mutableStateOf(0.0) }
+    var viewH by remember { mutableStateOf(0.0) }
+    var k by remember { mutableStateOf(0.0) }
+    var kMin by remember { mutableStateOf(1.0) }
+    var cx by remember { mutableStateOf(0.0) }
+    var cz by remember { mutableStateOf(0.0) }
+
+    /** Centres the view on the pile (the higher part of the scan) with some margin. */
+    fun fitView(s: SurfaceGrid) {
+        if (viewW <= 0 || viewH <= 0) return
+        val r = pileExtent(s)
+        val w = (r[2] - r[0]).coerceAtLeast(2.0) * 1.4
+        val h = (r[3] - r[1]).coerceAtLeast(2.0) * 1.4
+        k = minOf(viewW / w, viewH / h)
+        kMin = minOf(viewW / (s.cols * s.cell), viewH / (s.rows * s.cell)) * 0.8
+        cx = (r[0] + r[2]) / 2; cz = (r[1] + r[3]) / 2
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -137,14 +166,24 @@ fun BoundaryEditorScreen(projectId: String, onDone: () -> Unit, onCancel: () -> 
                 style = MaterialTheme.typography.bodySmall,
             )
 
-            // ---- Top-down map with the drawing on top
-            Box(Modifier.fillMaxWidth().aspectRatio(s.cols.toFloat() / s.rows)) {
-                Image(img, "Pohled shora", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
-                Canvas(
-                    Modifier.fillMaxSize().pointerInput(circleMode) {
+            // ---- Top-down map: pinch to zoom, drag to move, tap to draw
+            Box(
+                Modifier.fillMaxWidth().height(440.dp).clipToBounds().background(Color(0xFF263238))
+                    .onSizeChanged { sz -> viewW = sz.width.toDouble(); viewH = sz.height.toDouble(); if (k == 0.0) fitView(s) }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { centroid, pan, zoom, _ ->
+                            if (k == 0.0) return@detectTransformGestures
+                            val wx = cx + (centroid.x - viewW / 2) / k
+                            val wz = cz - (centroid.y - viewH / 2) / k
+                            k = (k * zoom).coerceIn(kMin, kMin * 60)
+                            cx = wx - (centroid.x - viewW / 2) / k - pan.x / k
+                            cz = wz + (centroid.y - viewH / 2) / k + pan.y / k
+                        }
+                    }
+                    .pointerInput(circleMode) {
                         detectTapGestures { o ->
-                            val k = size.width.toDouble() / s.cols
-                            val p = P(s.originX + o.x / k * s.cell, s.originZ + (s.rows - o.y / k) * s.cell)
+                            if (k == 0.0) return@detectTapGestures
+                            val p = P(cx + (o.x - viewW / 2) / k, cz - (o.y - viewH / 2) / k)
                             preview = null; error = null
                             if (circleMode) {
                                 val c = center
@@ -152,9 +191,17 @@ fun BoundaryEditorScreen(projectId: String, onDone: () -> Unit, onCancel: () -> 
                             } else vertices.add(p)
                         }
                     }
-                ) {
-                    val k = size.width / s.cols
-                    fun toScreen(x: Double, z: Double) = Offset(((x - s.originX) / s.cell * k).toFloat(), ((s.rows - (z - s.originZ) / s.cell) * k).toFloat())
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    if (k == 0.0) return@Canvas
+                    fun toScreen(x: Double, z: Double) = Offset((viewW / 2 + (x - cx) * k).toFloat(), (viewH / 2 - (z - cz) * k).toFloat())
+                    val tl = toScreen(s.originX, s.originZ + s.rows * s.cell)
+                    drawImage(
+                        img, srcOffset = IntOffset.Zero, srcSize = IntSize(s.cols, s.rows),
+                        dstOffset = IntOffset(tl.x.toInt(), tl.y.toInt()),
+                        dstSize = IntSize((s.cols * s.cell * k).toInt(), (s.rows * s.cell * k).toInt()),
+                        filterQuality = FilterQuality.None,
+                    )
                     // Walked path outline for orientation
                     if (s.pathHull.size >= 3) {
                         val hp = Path()
@@ -162,12 +209,18 @@ fun BoundaryEditorScreen(projectId: String, onDone: () -> Unit, onCancel: () -> 
                         hp.close()
                         drawPath(hp, Color(0x99FFFFFF), style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))))
                     }
+                    // Range-pole ground points
+                    s.groundPoints.forEach { g ->
+                        val o = toScreen(g[0], g[2])
+                        drawRect(Color.Black, Offset(o.x - 9, o.y - 9), androidx.compose.ui.geometry.Size(18f, 18f))
+                        drawRect(Color.White, Offset(o.x - 6, o.y - 6), androidx.compose.ui.geometry.Size(12f, 12f))
+                    }
                     val line = Color(0xFFFF1744)
                     if (circleMode) {
                         center?.let { c ->
                             val o = toScreen(c.x, c.z)
                             drawCircle(line, 8f, o)
-                            radius?.let { r -> drawCircle(line, (r / s.cell * k).toFloat(), o, style = Stroke(5f)) }
+                            radius?.let { r -> drawCircle(line, (r * k).toFloat(), o, style = Stroke(5f)) }
                         }
                     } else if (vertices.isNotEmpty()) {
                         val pts = vertices.map { toScreen(it.x, it.z) }
@@ -175,10 +228,28 @@ fun BoundaryEditorScreen(projectId: String, onDone: () -> Unit, onCancel: () -> 
                         if (pts.size >= 3) drawLine(line, pts.last(), pts.first(), 4f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
                         pts.forEach { drawCircle(Color.White, 9f, it); drawCircle(line, 6f, it) }
                     }
+                    // Scale bar: 1 m
+                    val bar = k.toFloat()
+                    drawLine(Color.White, Offset(16f, size.height - 18f), Offset(16f + bar, size.height - 18f), 4f)
+                }
+                Text("1 m", color = Color.White, fontSize = 11.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 22.dp))
+                Column(Modifier.align(Alignment.TopEnd).padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallMapButton("+") { k = (k * 1.5).coerceAtMost(kMin * 60) }
+                    SmallMapButton("−") { k = (k / 1.5).coerceAtLeast(kMin) }
+                    SmallMapButton("⌖") { fitView(s) }
                 }
             }
-            Text("Bílá čárkovaná čára = vaše trasa při skenování. Barvy = výška (modrá nízko → červená vysoko, šedá = nenaskenováno).",
-                style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Dva prsty = přiblížit / oddálit, jedním prstem posun. Bílá čárkovaná čára = vaše trasa, bílé čtverečky = body terénu z tyče. " +
+                    "Barvy = výška (modrá nízko → červená vysoko, šedá = nenaskenováno).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (s.groundPoints.size >= 3) {
+                OutlinedButton(onClick = {
+                    circleMode = false; reset()
+                    s.groundPoints.forEach { vertices.add(P(it[0], it[2])) }
+                }) { Text("Hranice z bodů tyče (${s.groundPoints.size})") }
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!circleMode) OutlinedButton(enabled = vertices.isNotEmpty(), onClick = { vertices.removeAt(vertices.lastIndex); preview = null }) { Text("Zpět o bod") }
@@ -256,4 +327,42 @@ private fun renderSurface(s: SurfaceGrid): ImageBitmap {
     }
     bmp.setPixels(px, 0, s.cols, 0, 0, s.cols, s.rows)
     return bmp.asImageBitmap()
+}
+
+@Composable
+private fun SmallMapButton(label: String, onClick: () -> Unit) {
+    androidx.compose.material3.FilledTonalButton(
+        onClick = onClick,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+        modifier = Modifier.size(42.dp),
+    ) { Text(label, fontSize = 20.sp) }
+}
+
+/**
+ * [minX, minZ, maxX, maxZ] of the pile: cells clearly above the ground level of the scan
+ * (falls back to all scanned cells, and includes range-pole points).
+ */
+private fun pileExtent(s: SurfaceGrid): DoubleArray {
+    val valid = s.surface.filter { !it.isNaN() }.sorted()
+    var minX = Double.MAX_VALUE; var minZ = Double.MAX_VALUE; var maxX = -Double.MAX_VALUE; var maxZ = -Double.MAX_VALUE
+    fun take(threshold: Float): Int {
+        var n = 0
+        for (r in 0 until s.rows) for (c in 0 until s.cols) {
+            val h = s.surface[r * s.cols + c]
+            if (h.isNaN() || h < threshold) continue
+            val x = s.originX + (c + 0.5) * s.cell; val z = s.originZ + (r + 0.5) * s.cell
+            if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
+            n++
+        }
+        return n
+    }
+    if (valid.size > 20) {
+        val lo = valid[(valid.size * 0.10).toInt()]; val hi = valid[((valid.size - 1) * 0.99).toInt()]
+        if (take(lo + (hi - lo) * 0.35f) < 20) take(Float.NEGATIVE_INFINITY)
+    } else take(Float.NEGATIVE_INFINITY)
+    s.groundPoints.forEach { g ->
+        minX = minOf(minX, g[0]); maxX = maxOf(maxX, g[0]); minZ = minOf(minZ, g[2]); maxZ = maxOf(maxZ, g[2])
+    }
+    if (minX > maxX) { minX = s.originX; maxX = s.originX + s.cols * s.cell; minZ = s.originZ; maxZ = s.originZ + s.rows * s.cell }
+    return doubleArrayOf(minX, minZ, maxX, maxZ)
 }

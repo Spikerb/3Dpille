@@ -78,12 +78,49 @@ fun clutterScenario(): Boolean {
     return abs(e(circle.volumeM3)) < 2 && abs(e(polygon.volumeM3)) < 2 && e(walked.volumeM3) > 10
 }
 
+/** Ground badly seen by the depth camera (bumpy, biased); range-pole points fix the base plane. */
+fun poleScenario(): Boolean {
+    val rnd = Random(5)
+    val cloud = VoxelCloud(0.05f)
+    val R = 4.0; val H = 2.5
+    fun ground(x: Double, z: Double) = 0.04 * x + 0.02 * z
+    fun pile(x: Double, z: Double) = max(0.0, H * (1 - hypot(x, z) / R))
+    var x = -7.0
+    while (x <= 7.0) {
+        var z = -7.0
+        while (z <= 7.0) {
+            val r = hypot(x, z)
+            if (r < R) repeat(3) { cloud.add(x.toFloat(), (ground(x, z) + pile(x, z) + rnd.nextDouble(-0.02, 0.02)).toFloat(), z.toFloat()) }
+            else if (r < 7 && rnd.nextDouble() < 0.5) {
+                // poorly seen ground: noisy and lifted by grass/clutter
+                val bump = if (rnd.nextDouble() < 0.3) rnd.nextDouble(0.1, 0.6) else 0.0
+                repeat(2) { cloud.add(x.toFloat(), (ground(x, z) + bump + rnd.nextDouble(-0.08, 0.08)).toFloat(), z.toFloat()) }
+            }
+            z += 0.05
+        }
+        x += 0.05
+    }
+    val path = (0 until 120).map { val a = it * 2 * PI / 120; Vec3((6.5 * cos(a)).toFloat(), 1.5f, (6.5 * sin(a)).toFloat()) }
+    val pole = (0 until 6).map { val a = it * 2 * PI / 6; val px = 4.3 * cos(a); val pz = 4.3 * sin(a)
+        doubleArrayOf(px, ground(px, pz) + rnd.nextDouble(-0.01, 0.01), pz) }
+    val truth = PI * R * R * H / 3
+    val noPole = VolumeCalculator.volumeIn(VolumeCalculator.buildSurface(cloud.snapshot(), path),
+        VolumeCalculator.circle(0.0, 0.0, 4.6), VolumeCalculator.BoundaryKind.USER)
+    val withPole = VolumeCalculator.volumeIn(VolumeCalculator.buildSurface(cloud.snapshot(), path, groundPoints = pole),
+        pole.map { doubleArrayOf(it[0], it[2]) }, VolumeCalculator.BoundaryKind.USER)
+    fun e(v: Double) = (v - truth) / truth * 100
+    println("pole: truth %.1f | scan ground %.1f (%+.1f%%, slope %.1f%%) | pole ground %.1f (%+.1f%%, slope %.1f%%, maxH %.2f)".format(
+        truth, noPole.volumeM3, e(noPole.volumeM3), noPole.baseSlopePct, withPole.volumeM3, e(withPole.volumeM3), withPole.baseSlopePct, withPole.maxHeightM))
+    // Boundary = hexagon through the 6 pole points slightly inside the toe circle -> cuts a little volume (~3 %)
+    return abs(e(withPole.volumeM3)) < 5 && abs(withPole.baseSlopePct - 4.47) < 0.5
+}
+
 fun main() {
     val ok = listOf(
         scenario("cone 10m/5m, sloped, hole", 10.0, 5.0, 0.03 to -0.02, 0.03, 1.5, 12.0),
         scenario("small pile 3m/1.5m flat", 3.0, 1.5, 0.0 to 0.0, 0.02, 0.0, 4.5),
         scenario("cone 6m/3m steep ground", 6.0, 3.0, 0.08 to 0.05, 0.04, 1.0, 8.0),
-    ).all { it } && clutterScenario()
+    ).all { it } && clutterScenario() && poleScenario()
     println(if (ok) "PASS" else "FAIL")
     if (!ok) kotlin.system.exitProcess(1)
 }
